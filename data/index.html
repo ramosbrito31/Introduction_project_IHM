@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1013">
+<title>Placa de Reflow</title>
+<style>
+:root{
+  --bg:#0e1013; --panel:#161a1f; --panel2:#1d2229; --line:#272e37; --grid:#222830;
+  --text:#e8eaed; --muted:#8a929d; --dim:#5d6570;
+  --ember:#ff6a2b; --ember-soft:rgba(255,106,43,.16);
+  --ideal:#7cc4ff; --liq:#c792ea;
+  --ok:#3fd49a; --warn:#ffc94d; --bad:#ff4d5e;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --r:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+[hidden]{display:none!important}
+
+/* ---------- topo ---------- */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(14,16,19,.92);backdrop-filter:blur(8px);z-index:5}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.mark{width:30px;height:30px;border-radius:8px;flex:none;background:linear-gradient(135deg,#ffb347,var(--ember) 55%,#c2361b);box-shadow:0 0 18px rgba(255,106,43,.35)}
+.brand>div{min-width:0}
+.brand h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand small{display:block;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top-right{display:flex;align-items:center;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;padding:6px 11px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);white-space:nowrap}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--dim)}
+.pill.ok::before{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.pill.demo::before{background:var(--warn)}
+.pill.off::before{background:var(--bad)}
+.icon{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);display:grid;place-items:center}
+.icon svg{width:17px;height:17px}
+.hot{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:6px 11px;border-radius:999px;color:#1a0d06;background:var(--ember);animation:pulse 1.6s ease-in-out infinite;white-space:nowrap}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,106,43,.55)}50%{box-shadow:0 0 0 7px rgba(255,106,43,0)}}
+
+.banner{margin:14px 20px 0;padding:10px 14px;border-radius:10px;border:1px solid #4a2a2f;background:#21151a;color:#f2c6cb;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.banner button{background:transparent;border:1px solid #6b3a41;border-radius:8px;padding:6px 10px;font-size:12px}
+
+/* ---------- layout ---------- */
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;padding:16px 20px 28px;max-width:1400px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.side{display:flex;flex-direction:column;gap:16px}
+
+.chart-card{display:flex;flex-direction:column;min-width:0}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px 4px;flex-wrap:wrap}
+.card-head h2{font-size:13px;margin:0;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.8px}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--muted)}
+.lg{display:inline-flex;align-items:center;gap:7px}
+.lg::before{content:"";width:18px;height:0;border-top:2.5px solid var(--ember)}
+.lg.ideal::before{border-top:2px dashed var(--ideal)}
+.lg.liq::before{border-top:1.5px dotted var(--liq)}
+.chart-wrap{position:relative;height:clamp(280px,56vh,600px);margin:4px 6px 0}
+#chart{width:100%;height:100%;display:block;touch-action:pan-y}
+.tip{position:absolute;pointer-events:none;background:rgba(22,26,31,.96);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:12px;line-height:1.55;font-family:var(--mono);white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.tip b{font-weight:600}
+.tip .r{color:var(--ember)} .tip .i{color:var(--ideal)}
+.card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 16px 14px;color:var(--muted);font-size:12px;flex-wrap:wrap}
+.ghost{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 12px;font-size:12px}
+.ghost:disabled{opacity:.45;cursor:default}
+
+/* ---------- leitura ---------- */
+.readout{padding:16px}
+.state{display:inline-block;font-size:11px;font-weight:650;letter-spacing:.9px;text-transform:uppercase;padding:4px 9px;border-radius:6px;background:var(--panel2);color:var(--muted)}
+.state.running{background:var(--ember-soft);color:var(--ember)}
+.state.done{background:rgba(63,212,154,.14);color:var(--ok)}
+.state.error,.state.stopped{background:rgba(255,77,94,.14);color:var(--bad)}
+.big{display:flex;align-items:baseline;gap:6px;margin:10px 0 2px;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.big #tempNow{font-size:54px;font-weight:600;letter-spacing:-1.5px;line-height:1}
+.big .unit{font-size:20px;color:var(--muted)}
+.sub{color:var(--muted);font-size:13px;font-family:var(--mono)}
+.sub b{color:var(--text);font-weight:500}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 0}
+.stats div{background:var(--panel2);border-radius:10px;padding:9px 11px;min-width:0}
+.stats dt{font-size:11px;color:var(--muted);margin-bottom:3px}
+.stats dd{margin:0;font-family:var(--mono);font-size:15px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.duty{margin-top:14px}
+.duty-head{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
+.duty-head b{color:var(--text);font-family:var(--mono);font-weight:500}
+.bar{height:8px;border-radius:99px;background:var(--panel2);overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#ffb347,var(--ember));transition:width .3s}
+
+/* ---------- controles ---------- */
+.controls{padding:16px;display:flex;flex-direction:column;gap:12px}
+.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--panel2);border-radius:10px;padding:3px}
+.tab{background:transparent;border:0;border-radius:8px;padding:8px;font-size:13px;color:var(--muted)}
+.tab.active{background:var(--line);color:var(--text)}
+.tab:disabled{cursor:default}
+label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
+select,input{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 10px;font-size:14px;width:100%}
+select:disabled,input:disabled{opacity:.55}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.filebar{margin-top:10px}
+.link{background:none;border:0;padding:6px 0 0;font-size:12px;color:var(--muted);text-decoration:underline;text-align:left}
+.pinfo{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.6}
+.primary{border:0;border-radius:11px;padding:13px;font-size:15px;font-weight:650;background:var(--ember);color:#1a0d06;transition:filter .15s}
+.primary:hover{filter:brightness(1.08)}
+.primary.stop{background:var(--bad);color:#fff}
+.primary:disabled{opacity:.5;cursor:default;filter:none}
+
+/* ---------- aviso de término ---------- */
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:20;display:flex;align-items:center;gap:14px;padding:13px 14px 13px 18px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);box-shadow:0 12px 40px rgba(0,0,0,.5);font-size:14px;max-width:calc(100vw - 28px)}
+.toast.ok{border-color:rgba(63,212,154,.5)} .toast.bad{border-color:rgba(255,77,94,.55)}
+.toast button{background:var(--line);border:0;border-radius:8px;padding:7px 12px;font-size:13px}
+
+/* ---------- janela "baixar modelo" ---------- */
+.dlg{width:min(420px,calc(100vw - 32px));padding:0;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.dlg::backdrop{background:rgba(0,0,0,.6)}
+.dlg form{display:flex;flex-direction:column;gap:14px;padding:18px}
+.dlg h2{margin:0;font-size:16px;font-weight:650}
+.check{flex-direction:row;align-items:center;gap:9px;font-size:13px;color:var(--text);cursor:pointer}
+.check input{width:16px;height:16px;flex:none;margin:0;accent-color:var(--ember)}
+.fname{background:var(--panel2);border-radius:9px;padding:9px 10px;font-family:var(--mono);font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.dlg-actions{display:flex;justify-content:flex-end;gap:8px}
+.dlg-actions .primary{border-radius:9px;padding:7px 16px;font-size:13px}
+
+@media (max-width:900px){
+  .grid{grid-template-columns:1fr;padding:12px}
+  .top{padding:12px}
+  .banner{margin:12px 12px 0}
+  .chart-wrap{height:clamp(240px,48vh,420px)}
+  .big #tempNow{font-size:46px}
+  .side{display:contents}
+  .readout{order:0} .chart-card{order:1} .controls{order:2}
+  body{padding-bottom:84px}
+  #startBtn{position:fixed;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:6;box-shadow:0 8px 28px rgba(0,0,0,.55)}
+  .toast{bottom:84px}
+}
+@media (max-width:480px){ .hot span{display:none} .legend{gap:10px} .brand h1{font-size:15px} .pill{padding:6px 9px} }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="mark"></div>
+    <div><h1>Placa de Reflow</h1><small id="profName">—</small></div>
+  </div>
+  <div class="top-right">
+    <span id="hotBadge" class="hot" hidden title="Superfície quente">⚠ <span>Superfície quente</span></span>
+    <span id="conn" class="pill">Conectando…</span>
+    <button id="muteBtn" class="icon" title="Som do aviso de término" aria-label="Som"></button>
+  </div>
+</header>
+
+<div id="offBanner" class="banner" hidden>
+  <span>Sem conexão com a placa. Tentando reconectar…</span>
+  <button id="demoBtn">Usar simulação</button>
+</div>
+
+<main class="grid">
+  <section class="card chart-card">
+    <div class="card-head">
+      <h2>Temperatura</h2>
+      <div class="legend">
+        <span class="lg">Medida</span>
+        <span class="lg ideal">Curva planejada</span>
+        <span class="lg liq" id="lgLiq">Liquidus</span>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chartWrap">
+      <canvas id="chart"></canvas>
+      <div id="tip" class="tip" hidden></div>
+    </div>
+    <div class="card-foot">
+      <span id="footInfo">Aguardando início do ciclo</span>
+      <button id="csvBtn" class="ghost" disabled>Baixar log (CSV)</button>
+    </div>
+  </section>
+
+  <aside class="side">
+    <section class="card readout">
+      <span id="stateLbl" class="state">Ocioso</span>
+      <div class="big"><span id="tempNow">--.-</span><span class="unit">°C</span></div>
+      <div class="sub">alvo <b id="tempTarget">--</b> °C &nbsp;·&nbsp; desvio <b id="tempDelta">--</b></div>
+      <dl class="stats">
+        <div><dt>Taxa de variação</dt><dd id="rate">--</dd></div>
+        <div><dt>Fase</dt><dd id="phase">—</dd></div>
+        <div><dt>Tempo</dt><dd id="elapsed">0:00</dd></div>
+        <div><dt>Restante</dt><dd id="remain">--</dd></div>
+      </dl>
+      <div class="duty">
+        <div class="duty-head"><span>Esforço da resistência (duty)</span><b id="dutyVal">0%</b></div>
+        <div class="bar"><i id="dutyBar"></i></div>
+      </div>
+    </section>
+
+    <section class="card controls">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-mode="curve">Curva</button>
+        <button class="tab" data-mode="static">Estático</button>
+      </div>
+      <div id="paneCurve">
+        <label>Perfil
+          <select id="profileSel"></select>
+        </label>
+        <div class="row2 filebar">
+          <button id="loadBtn" class="ghost" type="button" title="Arquivo .xlsx ou .csv">Carregar do PC</button>
+          <button id="tplBtn" class="ghost" type="button">Baixar modelo</button>
+        </div>
+        <button id="delBtn" class="link" type="button" hidden>Remover esta curva da lista</button>
+        <input id="fileIn" type="file" accept=".xlsx,.csv,.txt" hidden>
+      </div>
+      <div id="paneStatic" hidden>
+        <div class="row2">
+          <label>Temperatura (°C)<input id="stTemp" type="number" value="150" min="30" max="300" step="5"></label>
+          <label>Tempo (min)<input id="stTime" type="number" value="5" min="1" max="120" step="1"></label>
+        </div>
+      </div>
+      <div id="profInfo" class="pinfo"></div>
+      <button id="startBtn" class="primary">Iniciar</button>
+    </section>
+  </aside>
+</main>
+
+<div id="toast" class="toast" hidden><span id="toastMsg"></span><button id="toastOk">OK</button></div>
+
+<dialog id="tplDlg" class="dlg" aria-labelledby="tplTitle">
+  <form id="tplForm">
+    <h2 id="tplTitle">Baixar modelo</h2>
+    <label>Nome do arquivo
+      <input id="tplName" type="text" maxlength="47" value="modelo-curva" placeholder="modelo-curva" autocomplete="off">
+    </label>
+    <label>Tipo de curva
+      <select id="tplCurve"></select>
+    </label>
+    <label class="check"><input id="tplAddCurve" type="checkbox"> Adicionar o tipo de curva ao nome</label>
+    <label class="check"><input id="tplAddDate" type="checkbox"> Adicionar a data ao nome</label>
+    <div id="tplPreview" class="fname"></div>
+    <div class="dlg-actions">
+      <button id="tplCancel" class="ghost" type="button">Cancelar</button>
+      <button class="primary" type="submit">Baixar</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+"use strict";
+/* =====================================================================
+   CONFIGURAÇÃO
+   ===================================================================== */
+const HOT_C = 50;          // acima disso: aviso de superfície quente
+const STALE_MS = 4000;     // sem telemetria por esse tempo => "sem dados"
+const TAMB = 25;
+
+// Perfis padrão. pts = [tempo_s, temperatura_C, "fase do trecho que termina neste ponto"]
+const PROFILES = [
+  { id:"sac305", name:"SAC305 (sem chumbo)", liq:217, pts:[
+    [0,25],[90,150,"Pré-aquec."],[180,180,"Imersão"],[210,217,"Rampa"],
+    [240,245,"Refusão"],[270,217,"Refusão"],[360,50,"Resfriamento"]]},
+  { id:"sn63", name:"Sn63Pb37 (com chumbo)", liq:183, pts:[
+    [0,25],[90,150,"Pré-aquec."],[180,165,"Imersão"],[205,183,"Rampa"],
+    [225,220,"Refusão"],[255,183,"Refusão"],[330,50,"Resfriamento"]]},
+  { id:"snbi", name:"Sn42Bi58 (baixa temp.)", liq:138, pts:[
+    [0,25],[60,90,"Pré-aquec."],[150,120,"Imersão"],[170,138,"Rampa"],
+    [195,165,"Refusão"],[225,138,"Refusão"],[300,50,"Resfriamento"]]},
+];
+
+/* =====================================================================
+   ESTADO
+   ===================================================================== */
+const S = {
+  mode:"curve", profile:null, samples:[], // samples: [t, temp, alvo, duty]
+  state:"idle", temp:null, target:null, duty:0, t:null, rate:null, phase:null,
+  link:null, conn:"connecting", lastMsg:0, pending:false, muted:false, hoverX:null,
+};
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const fmtTime = s => { s = Math.max(0, Math.round(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
+const fmt1 = v => v==null || isNaN(v) ? "--" : v.toFixed(1);
+
+/* ---------- utilidades de perfil ---------- */
+function interp(pts, t){
+  if (!pts || !pts.length) return null;
+  if (t <= pts[0][0]) return pts[0][1];
+  for (let i=1;i<pts.length;i++){
+    const [t1,v1]=pts[i-1], [t2,v2]=pts[i];
+    if (t <= t2) return v1 + (v2-v1)*(t-t1)/((t2-t1)||1);
+  }
+  return pts[pts.length-1][1];
+}
+function phaseAt(pts, t){
+  if (!pts) return null;
+  for (let i=1;i<pts.length;i++) if (t <= pts[i][0]) return pts[i][2] || null;
+  return pts[pts.length-1][2] || null;
+}
+function phaseBands(pts){
+  const out=[];
+  for (let i=1;i<pts.length;i++){
+    const name = pts[i][2] || "";
+    const last = out[out.length-1];
+    if (last && last.name===name) last.t2 = pts[i][0];
+    else out.push({name, t1:pts[i-1][0], t2:pts[i][0]});
+  }
+  return out;
+}
+const profEnd  = p => p ? p.pts[p.pts.length-1][0] : 0;
+const profPeak = p => p ? Math.max(...p.pts.map(x=>x[1])) : 0;
+
+function staticProfile(T, min){
+  T = clamp(Math.round(+T||150), 30, 300); min = clamp(+min||5, 1, 120);
+  const ramp = Math.max(30, Math.round((T-TAMB)/1.2));
+  return { id:"static", static:true, name:`Estático ${T} °C · ${min} min`, liq:null,
+           pts:[[0,TAMB],[ramp,T,"Aquecimento"],[ramp+Math.round(min*60),T,"Patamar"]] };
+}
+function selectedProfile(){
+  if (S.mode==="static") return staticProfile($("stTemp").value, $("stTime").value);
+  return allProfiles().find(p=>p.id===$("profileSel").value) || PROFILES[0];
+}
+
+/* ---------- curvas carregadas do PC (.xlsx / .csv) ---------- */
+const MAX_C = 300, MAX_PTS = 20;   // limites aceitos pelo firmware
+const CUSTOM_KEY = "reflow.custom";
+let CUSTOM = (() => { try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || "[]"); } catch(e){ return []; } })();
+const saveCustom = () => { try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(CUSTOM)); } catch(e){} };
+const allProfiles = () => PROFILES.concat(CUSTOM);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+function num(v){
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  if (v == null) return null;
+  const s = String(v).trim().replace(",", ".");
+  return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null;
+}
+function parseTime(v){
+  if (typeof v === "string" && /^\s*\d+:\d{1,2}\s*$/.test(v)){ const [m, s] = v.split(":"); return (+m)*60 + (+s); }
+  return num(v);
+}
+
+function rowsToProfile(rows, fileName){
+  let name = fileName.replace(/\.[^.]+$/, ""), liq = null;
+  const pts = [];
+  for (const r of rows){
+    if (!r) continue;
+    const key = String(r[0] ?? "").trim().toLowerCase();
+    if (key.startsWith("nome")){ if (r[1] != null && String(r[1]).trim()) name = String(r[1]).trim(); continue; }
+    if (key.startsWith("liquidus")){ liq = num(r[1]); continue; }
+    const t = parseTime(r[0]), T = num(r[1]);
+    if (t == null || T == null) continue;               // cabeçalho ou linha vazia
+    const fase = r[2] != null ? String(r[2]).trim().slice(0, 19) : "";
+    pts.push(fase ? [t, T, fase] : [t, T]);
+  }
+  if (pts.length < 2) throw new Error("não encontrei pelo menos 2 linhas com tempo e temperatura nas colunas A e B.");
+  if (pts[0][0] > 0) pts.unshift([0, TAMB]);
+  for (let i = 1; i < pts.length; i++)
+    if (pts[i][0] <= pts[i-1][0]) throw new Error(`o tempo precisa sempre aumentar (linha com ${pts[i][0]} s).`);
+  for (const p of pts){
+    if (p[1] < 0 || p[1] > MAX_C) throw new Error(`temperatura ${p[1]} °C fora do limite (0 a ${MAX_C} °C).`);
+  }
+  if (pts.length > MAX_PTS) throw new Error(`a curva tem ${pts.length} pontos; o máximo é ${MAX_PTS}.`);
+  return { id:"custom-" + Date.now(), custom:true, name:name.slice(0, 47), liq, pts };
+}
+
+function parseCsv(txt){
+  const lines = txt.replace(/^﻿/, "").split(/\r?\n/);
+  const sep = lines.some(l => l.includes(";")) ? ";" : lines.some(l => l.includes("\t")) ? "\t" : ",";
+  return lines.map(l => l.split(sep).map(c => c.trim().replace(/^"(.*)"$/, "$1")));
+}
+function decodeText(buf){
+  try { return new TextDecoder("utf-8", { fatal:true }).decode(buf); }
+  catch(e){ return new TextDecoder("windows-1252").decode(buf); }   // CSV salvo pelo Excel em pt-BR
+}
+
+// Leitor mínimo de .xlsx (é um .zip com XML dentro). Sem bibliotecas externas.
+async function readXlsx(buf){
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--)
+    if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  if (eocd < 0) throw new Error("o arquivo não parece ser um .xlsx válido.");
+  const files = {}; let p = dv.getUint32(eocd + 16, true);
+  for (let k = 0, n = dv.getUint16(eocd + 10, true); k < n && dv.getUint32(p, true) === 0x02014b50; k++){
+    const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+    files[new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nl))] =
+      { method:dv.getUint16(p + 10, true), size:dv.getUint32(p + 20, true), off:dv.getUint32(p + 42, true) };
+    p += 46 + nl + el + cl;
+  }
+  async function get(name){
+    const f = files[name]; if (!f) return null;
+    const start = f.off + 30 + dv.getUint16(f.off + 26, true) + dv.getUint16(f.off + 28, true);
+    const data = u8.subarray(start, start + f.size);
+    if (f.method === 0) return new TextDecoder().decode(data);
+    if (f.method !== 8) throw new Error("compressão do .xlsx não suportada.");
+    const out = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+    return new TextDecoder().decode(out);
+  }
+  const sheet = Object.keys(files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+    .sort((a, b) => a.match(/sheet(\d+)/)[1] - b.match(/sheet(\d+)/)[1])[0];
+  if (!sheet) throw new Error("nenhuma planilha encontrada no arquivo.");
+  const parse = s => new DOMParser().parseFromString(s, "application/xml");
+  const tags = (el, t) => Array.from(el.getElementsByTagNameNS("*", t));
+  const ss = [], ssTxt = await get("xl/sharedStrings.xml");
+  if (ssTxt) for (const si of tags(parse(ssTxt), "si")) ss.push(tags(si, "t").map(t => t.textContent).join(""));
+  const colIdx = ref => { let n = 0; for (const ch of ref.replace(/\d+/g, "")) n = n*26 + ch.charCodeAt(0) - 64; return n - 1; };
+  const rows = [];
+  for (const row of tags(parse(await get(sheet)), "row")){
+    const r = [];
+    for (const c of tags(row, "c")){
+      const type = c.getAttribute("t"), v = tags(c, "v")[0];
+      let val = null;
+      if (type === "s") val = v ? ss[+v.textContent] : null;
+      else if (type === "inlineStr") val = tags(c, "t").map(x => x.textContent).join("");
+      else if (type === "str" || type === "b") val = v ? v.textContent : null;
+      else if (v) val = parseFloat(v.textContent);
+      const ci = colIdx(c.getAttribute("r") || "");
+      r[ci >= 0 ? ci : r.length] = val;
+    }
+    rows.push(r);
+  }
+  return rows;
+}
+
+/* =====================================================================
+   GRÁFICO (canvas puro, sem bibliotecas)
+   ===================================================================== */
+const canvas = $("chart"), ctx = canvas.getContext("2d");
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = { ember:css("--ember"), ideal:css("--ideal"), liq:css("--liq"), grid:css("--grid"),
+            line:css("--line"), muted:css("--muted"), dim:css("--dim"), text:css("--text") };
+let dirty = true, geo = null;
+const redraw = () => { dirty = true; };
+
+function niceStepX(span){ for (const s of [15,30,60,120,300,600]) if (span/s <= 9) return s; return 1200; }
+
+function draw(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== Math.round(w*dpr) || canvas.height !== Math.round(h*dpr)){
+    canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr);
+  }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+
+  const P = S.profile, sm = S.samples;
+  const lastT = sm.length ? sm[sm.length-1][0] : 0;
+  const end = profEnd(P) || 300;
+  const xStep = niceStepX(Math.max(end, lastT));
+  const xMax = Math.ceil(Math.max(end*1.04, lastT*1.03 + 5) / xStep) * xStep;
+  let peak = Math.max(profPeak(P), 100);
+  for (const s of sm) if (s[1] > peak) peak = s[1];
+  const yStep = peak > 160 ? 50 : 25;
+  const yMax = Math.ceil((peak + yStep*0.5) / yStep) * yStep;
+
+  const pad = { l:44, r:14, t:22, b:26 };
+  const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
+  const X = t => pad.l + t/xMax*pw;
+  const Y = v => pad.t + ph - v/yMax*ph;
+  geo = { X, Y, xMax, yMax, pad, pw, ph, w, h };
+
+  ctx.font = `11px ${css("--sans")}`;
+  ctx.textBaseline = "middle";
+
+  // faixas das fases
+  if (P){
+    phaseBands(P.pts).forEach((b,i)=>{
+      const x1 = X(b.t1), x2 = X(b.t2);
+      ctx.fillStyle = i%2 ? "rgba(255,255,255,.028)" : "rgba(255,255,255,0)";
+      ctx.fillRect(x1, pad.t, x2-x1, ph);
+      if (b.name && ctx.measureText(b.name).width + 8 < x2-x1){
+        ctx.fillStyle = C.dim; ctx.textAlign = "center";
+        ctx.fillText(b.name, (x1+x2)/2, pad.t - 10);
+      }
+    });
+  }
+
+  // grade + eixos
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.fillStyle = C.muted;
+  ctx.textAlign = "right";
+  for (let v=0; v<=yMax; v+=yStep){
+    const y = Math.round(Y(v))+.5;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+pw, y); ctx.stroke();
+    ctx.fillText(v+"°", pad.l-7, y);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let t=0; t<=xMax; t+=xStep){
+    const x = Math.round(X(t))+.5;
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+ph); ctx.stroke();
+    ctx.fillText(fmtTime(t), x, pad.t+ph+8);
+  }
+  ctx.textBaseline = "middle";
+
+  // linha de liquidus
+  if (P && P.liq){
+    const y = Y(P.liq);
+    ctx.save(); ctx.setLineDash([2,4]); ctx.strokeStyle = C.liq; ctx.globalAlpha = .7;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+pw, y); ctx.stroke(); ctx.restore();
+    ctx.fillStyle = C.liq; ctx.textAlign = "left"; ctx.globalAlpha = .85;
+    ctx.fillText(`liquidus ${P.liq}°`, pad.l+6, y-8); ctx.globalAlpha = 1;
+  }
+
+  // curva planejada (ideal)
+  if (P){
+    ctx.save(); ctx.setLineDash([7,5]); ctx.strokeStyle = C.ideal; ctx.lineWidth = 2; ctx.lineJoin = "round";
+    ctx.beginPath();
+    P.pts.forEach((p,i)=> i ? ctx.lineTo(X(p[0]),Y(p[1])) : ctx.moveTo(X(p[0]),Y(p[1])));
+    ctx.stroke(); ctx.restore();
+  }
+
+  // temperatura medida
+  if (sm.length > 1){
+    const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t+ph);
+    grad.addColorStop(0, "rgba(255,106,43,.22)"); grad.addColorStop(1, "rgba(255,106,43,0)");
+    ctx.beginPath(); ctx.moveTo(X(sm[0][0]), Y(0));
+    for (const s of sm) ctx.lineTo(X(s[0]), Y(s[1]));
+    ctx.lineTo(X(lastT), Y(0)); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+
+    ctx.beginPath();
+    sm.forEach((s,i)=> i ? ctx.lineTo(X(s[0]),Y(s[1])) : ctx.moveTo(X(s[0]),Y(s[1])));
+    ctx.strokeStyle = C.ember; ctx.lineWidth = 2.5; ctx.lineJoin = "round"; ctx.stroke();
+  }
+
+  // marcador do instante atual
+  if (sm.length){
+    const s = sm[sm.length-1], x = X(s[0]), y = Y(s[1]);
+    ctx.strokeStyle = "rgba(255,106,43,.35)"; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+ph); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,106,43,.25)"; ctx.beginPath(); ctx.arc(x,y,8,0,7); ctx.fill();
+    ctx.fillStyle = C.ember; ctx.beginPath(); ctx.arc(x,y,4,0,7); ctx.fill();
+  }
+
+  // cursor (hover/toque)
+  updateTip();
+}
+
+function nearestSample(t){
+  const sm = S.samples; if (!sm.length) return null;
+  let lo=0, hi=sm.length-1;
+  while (hi-lo>1){ const m=(lo+hi)>>1; if (sm[m][0] < t) lo=m; else hi=m; }
+  return Math.abs(sm[lo][0]-t) <= Math.abs(sm[hi][0]-t) ? sm[lo] : sm[hi];
+}
+function updateTip(){
+  const tip = $("tip");
+  if (S.hoverX==null || !geo){ tip.hidden = true; return; }
+  const { X, Y, xMax, pad, pw, ph } = geo;
+  const t = clamp((S.hoverX - pad.l)/pw*xMax, 0, xMax);
+  const s = nearestSample(t);
+  const tt = s && Math.abs(s[0]-t) < xMax*0.03 ? s[0] : t;
+  const ideal = S.profile ? interp(S.profile.pts, tt) : null;
+  if (tt > profEnd(S.profile) && !s){ tip.hidden = true; return; }
+
+  const x = X(tt);
+  ctx.strokeStyle = "rgba(232,234,237,.35)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+ph); ctx.stroke();
+  if (ideal!=null){ ctx.fillStyle = C.ideal; ctx.beginPath(); ctx.arc(x, Y(ideal), 3.5, 0, 7); ctx.fill(); }
+  const hasReal = s && Math.abs(s[0]-tt) < 0.01;
+  if (hasReal){ ctx.fillStyle = C.ember; ctx.beginPath(); ctx.arc(x, Y(s[1]), 4, 0, 7); ctx.fill(); }
+
+  tip.innerHTML =
+    `<div>t = <b>${fmtTime(tt)}</b></div>` +
+    (hasReal ? `<div class="r">medida &nbsp;&nbsp;<b>${s[1].toFixed(1)} °C</b></div>` : "") +
+    (ideal!=null ? `<div class="i">planejada <b>${ideal.toFixed(1)} °C</b></div>` : "") +
+    (hasReal && ideal!=null ? `<div>desvio &nbsp;&nbsp;<b>${(s[1]-ideal>=0?"+":"")+(s[1]-ideal).toFixed(1)} °C</b></div>` : "");
+  tip.hidden = false;
+  const tw = tip.offsetWidth, wrapW = canvas.clientWidth;
+  let left = x + 14; if (left + tw > wrapW - 4) left = x - tw - 14;
+  tip.style.left = left + "px"; tip.style.top = (pad.t + 6) + "px";
+}
+
+function onPointer(e){
+  const r = canvas.getBoundingClientRect();
+  S.hoverX = e.clientX - r.left; redraw();
+}
+canvas.addEventListener("pointermove", onPointer);
+canvas.addEventListener("pointerdown", onPointer);
+canvas.addEventListener("pointerleave", ()=>{ S.hoverX = null; redraw(); });
+new ResizeObserver(redraw).observe($("chartWrap"));
+(function loop(){ if (dirty){ dirty = false; draw(); } requestAnimationFrame(loop); })();
+
+/* =====================================================================
+   INTERFACE
+   ===================================================================== */
+const STATE_LBL = { idle:"Ocioso", running:"Em execução", done:"Concluído", stopped:"Interrompido", error:"Erro" };
+const running = () => S.state === "running";
+
+function renderReadout(){
+  $("tempNow").textContent = fmt1(S.temp);
+  $("tempTarget").textContent = S.target==null ? "--" : S.target.toFixed(0);
+  const d = (S.temp!=null && S.target!=null && running()) ? S.temp - S.target : null;
+  const dr = d==null ? null : Math.round(d*10)/10 || 0;
+  $("tempDelta").textContent = dr==null ? "--" : (dr>=0?"+":"") + dr.toFixed(1) + " °C";
+  $("rate").textContent = S.rate==null ? "--" : (S.rate>=0?"+":"") + S.rate.toFixed(2) + " °C/s";
+  $("phase").textContent = running() ? (S.phase || "—") : "—";
+  const end = profEnd(S.profile);
+  const t = S.t==null ? 0 : S.t;
+  $("elapsed").textContent = fmtTime(t) + " / " + fmtTime(end);
+  $("remain").textContent = running() ? fmtTime(end - t) : "--";
+  const duty = clamp(S.duty||0, 0, 100);
+  $("dutyVal").textContent = Math.round(duty) + "%";
+  $("dutyBar").style.width = duty + "%";
+  $("hotBadge").hidden = !(S.temp!=null && S.temp >= HOT_C);
+  $("csvBtn").disabled = !S.samples.length;
+  $("footInfo").textContent = S.samples.length
+    ? `${S.samples.length} amostras · ${S.profile ? S.profile.name : ""}`
+    : "Aguardando início do ciclo";
+}
+
+function renderControls(){
+  const lbl = $("stateLbl");
+  lbl.textContent = S.pending ? "Aguardando placa…" : (STATE_LBL[S.state] || S.state);
+  lbl.className = "state " + S.state;
+  const btn = $("startBtn");
+  const canTalk = !!S.link && (S.conn === "ok" || S.conn === "demo");
+  btn.textContent = running() ? "Parar" : "Iniciar";
+  btn.classList.toggle("stop", running());
+  btn.disabled = S.pending || !canTalk;
+  const lock = running() || S.pending;
+  document.querySelectorAll(".tab").forEach(b => b.disabled = lock);
+  ["profileSel","stTemp","stTime","loadBtn","delBtn"].forEach(id => $(id).disabled = lock);
+}
+
+function renderProfileInfo(){
+  const p = S.profile; if (!p) return;
+  $("profName").textContent = p.name;
+  $("profInfo").innerHTML =
+    `pico ${profPeak(p)} °C · duração ${fmtTime(profEnd(p))}` + (p.liq ? ` · liquidus ${p.liq} °C` : "");
+  $("lgLiq").hidden = !p.liq;
+}
+
+function renderConn(){
+  const el = $("conn");
+  const map = {
+    connecting:["", "Conectando…"], ok:["ok","Wi-Fi conectado"], stale:["off","Sem dados"],
+    off:["off","Desconectado"], demo:["demo", `Simulação ${SIM_SPEED}×`],
+  };
+  const [cls, txt] = map[S.conn] || map.off;
+  el.className = "pill " + cls; el.textContent = txt;
+  $("offBanner").hidden = !(S.conn === "off" || S.conn === "stale");
+  renderControls();
+}
+
+function previewProfile(){
+  if (running() || S.pending) return;
+  S.profile = selectedProfile();
+  if (S.state !== "done" && S.state !== "stopped") S.samples = [];
+  renderProfileInfo(); renderReadout(); redraw();
+}
+
+// abas Curva / Estático
+document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
+  S.mode = b.dataset.mode;
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x===b));
+  $("paneCurve").hidden = S.mode !== "curve";
+  $("paneStatic").hidden = S.mode !== "static";
+  S.samples = []; S.state = S.state==="running" ? S.state : "idle";
+  previewProfile(); renderControls();
+}));
+function profileOptions(){
+  const opt = p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`;
+  return PROFILES.map(opt).join("") +
+    (CUSTOM.length ? `<optgroup label="Carregadas do PC">${CUSTOM.map(opt).join("")}</optgroup>` : "");
+}
+function fillSelect(selId){
+  $("profileSel").innerHTML = profileOptions();
+  if (selId) $("profileSel").value = selId;
+  updateDelBtn();
+}
+function updateDelBtn(){ $("delBtn").hidden = !String($("profileSel").value).startsWith("custom-"); }
+fillSelect();
+$("profileSel").addEventListener("change", updateDelBtn);
+
+$("loadBtn").addEventListener("click", () => $("fileIn").click());
+$("fileIn").addEventListener("change", async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try {
+    if (/\.xls$/i.test(f.name)) throw new Error("formato .xls antigo; salve como .xlsx ou .csv.");
+    const buf = await f.arrayBuffer();
+    const rows = /\.xlsx$/i.test(f.name) ? await readXlsx(buf) : parseCsv(decodeText(buf));
+    const p = rowsToProfile(rows, f.name);
+    CUSTOM = [p, ...CUSTOM.filter(c => c.name !== p.name)].slice(0, 10);
+    saveCustom(); fillSelect(p.id);
+    S.samples = []; S.state = "idle"; previewProfile(); renderControls();
+    toast(`Curva "${p.name}" carregada (${p.pts.length} pontos).`, "ok");
+  } catch(err){
+    toast("Não foi possível ler a curva: " + err.message, "bad", true);
+  }
+});
+$("delBtn").addEventListener("click", () => {
+  const id = $("profileSel").value;
+  CUSTOM = CUSTOM.filter(c => c.id !== id); saveCustom(); fillSelect(PROFILES[0].id);
+  S.samples = []; S.state = "idle"; previewProfile(); renderControls();
+});
+
+/* ---------- baixar modelo ---------- */
+const TPL_DEFAULT = "modelo-curva";
+const cleanFileName = s => String(s).replace(/[\\/:*?"<>|\x00-\x1f]/g, "").trim().replace(/\.csv$/i, "").replace(/[. ]+$/, "");
+const tplBaseName = () => cleanFileName($("tplName").value) || TPL_DEFAULT;
+const tplProfile = () => allProfiles().find(p => p.id === $("tplCurve").value) || PROFILES[0];
+function localDate(){   // data do PC (toISOString usaria UTC e viraria o dia à noite no Brasil)
+  const d = new Date(), two = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+function tplFileName(){
+  const parts = [tplBaseName()];
+  if ($("tplAddCurve").checked){
+    const curve = cleanFileName(tplProfile().name.replace(/\s*\(.*?\)/g, ""));   // "SAC305 (sem chumbo)" -> "SAC305"
+    if (curve) parts.push(curve);
+  }
+  if ($("tplAddDate").checked) parts.push(localDate());
+  return parts.join("-") + ".csv";
+}
+function tplCsv(){
+  const p = tplProfile();
+  const cell = v => String(v ?? "").replace(/;/g, ",");   // ";" separa as colunas
+  const dec = v => String(v).replace(".", ",");           // Excel pt-BR
+  return [`Nome;${cell(tplBaseName())}`, ...(p.liq ? [`Liquidus;${dec(p.liq)}`] : []), "",
+    "Tempo (s);Temperatura (°C);Fase",
+    ...p.pts.map(([t, T, fase]) => `${dec(t)};${dec(T)};${cell(fase)}`)];
+}
+const renderTplPreview = () => { $("tplPreview").textContent = tplFileName(); };
+
+$("tplBtn").addEventListener("click", () => {
+  $("tplCurve").innerHTML = profileOptions();
+  $("tplCurve").value = $("profileSel").value;   // começa na curva escolhida no painel
+  renderTplPreview();
+  $("tplDlg").showModal();
+  $("tplName").select();
+});
+$("tplForm").addEventListener("input", renderTplPreview);
+$("tplCancel").addEventListener("click", () => $("tplDlg").close());
+$("tplForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const blob = new Blob(["﻿" + tplCsv().join("\r\n")], { type:"text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = tplFileName();
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  $("tplDlg").close();
+});
+["profileSel","stTemp","stTime"].forEach(id => $(id).addEventListener("input", () => { S.samples=[]; S.state="idle"; previewProfile(); renderControls(); }));
+
+/* ---------- iniciar / parar ---------- */
+let pendingTimer = null;
+$("startBtn").addEventListener("click", () => {
+  ensureAudio();
+  if (!S.link) return;
+  if (running()){
+    S.link.send({ cmd:"stop" });
+    return;
+  }
+  const p = selectedProfile();
+  S.profile = p; S.samples = []; S.t = 0;
+  renderProfileInfo(); redraw();
+  S.pending = true; renderControls();
+  S.link.send({ cmd:"start", mode: p.static ? "static" : "curve", profile:{ name:p.name, liq:p.liq, pts:p.pts } });
+  clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(() => {
+    if (S.pending){ S.pending = false; renderControls(); toast("A placa não respondeu ao comando de início.", "bad"); }
+  }, 4000);
+});
+
+/* ---------- CSV ---------- */
+$("csvBtn").addEventListener("click", () => {
+  const n = v => v==null ? "" : String(+v.toFixed(2)).replace(".", ",");
+  const lines = [
+    `# Perfil;${S.profile ? S.profile.name : ""}`,
+    `# Data;${new Date().toLocaleString("pt-BR")}`,
+    "tempo_s;temperatura_C;planejada_C;alvo_C;duty_pct",
+    ...S.samples.map(s => [n(s[0]), n(s[1]), n(S.profile ? interp(S.profile.pts, s[0]) : null), n(s[2]), n(s[3])].join(";"))
+  ];
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,"-");
+  a.href = URL.createObjectURL(blob); a.download = `reflow-${stamp}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+/* ---------- som / aviso ---------- */
+let actx = null;
+function ensureAudio(){
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch(e){}
+}
+function beep(seq){
+  if (S.muted || !actx) return;
+  let t0 = actx.currentTime + 0.02;
+  for (const [f, d, gap] of seq){
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = "sine"; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(g).connect(actx.destination); o.start(t0); o.stop(t0 + d + 0.03);
+    t0 += d + gap;
+  }
+}
+const ICON_ON  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg>';
+const ICON_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>';
+function renderMute(){ $("muteBtn").innerHTML = S.muted ? ICON_OFF : ICON_ON; $("muteBtn").title = S.muted ? "Som desligado" : "Som ligado"; }
+try { S.muted = localStorage.getItem("reflow.muted") === "1"; } catch(e){}
+$("muteBtn").addEventListener("click", () => {
+  ensureAudio(); S.muted = !S.muted; renderMute();
+  try { localStorage.setItem("reflow.muted", S.muted ? "1" : "0"); } catch(e){}
+  if (!S.muted) beep([[880,.08,0]]);
+});
+
+let toastTimer = null;
+function toast(msg, kind, sticky){
+  $("toastMsg").textContent = msg; $("toast").className = "toast " + (kind||""); $("toast").hidden = false;
+  clearTimeout(toastTimer); if (!sticky) toastTimer = setTimeout(() => $("toast").hidden = true, 6000);
+}
+$("toastOk").addEventListener("click", () => { $("toast").hidden = true; document.title = "Placa de Reflow"; });
+
+function setState(st, msg){
+  if (!st || st === S.state) return;
+  const prev = S.state; S.state = st;
+  if (st === "running"){ S.pending = false; clearTimeout(pendingTimer); if (prev !== "running" && S.samples.length && S.t === 0) S.samples = []; }
+  if (st === "done"){
+    S.pending = false;
+    toast("Ciclo concluído. Cuidado: a placa ainda está quente.", "ok", true);
+    beep([[880,.18,.08],[1175,.18,.08],[1568,.35,0]]);
+    try { navigator.vibrate && navigator.vibrate([200,100,200]); } catch(e){}
+    document.title = "✔ Concluído · Reflow";
+  }
+  if (st === "stopped"){ S.pending = false; toast("Ciclo interrompido.", "bad"); beep([[440,.2,0]]); }
+  if (st === "error"){ S.pending = false; toast("Erro na placa" + (msg ? ": " + msg : "."), "bad", true); beep([[330,.25,.1],[330,.25,0]]); }
+  renderControls(); renderReadout();
+}
+
+/* =====================================================================
+   MENSAGENS DA PLACA  (ver PROTOCOLO.md)
+   ===================================================================== */
+function computeRate(){
+  const sm = S.samples; if (sm.length < 2) return null;
+  const last = sm[sm.length-1];
+  let i = sm.length-2;
+  while (i > 0 && last[0] - sm[i][0] < 3) i--;
+  const dt = last[0] - sm[i][0];
+  return dt > 0 ? (last[1] - sm[i][1]) / dt : null;
+}
+
+function handle(m){
+  if (!m || typeof m !== "object") return;
+  S.lastMsg = performance.now();
+  if (S.conn === "stale"){ S.conn = "ok"; renderConn(); }
+  switch (m.type){
+    case "telemetry": {
+      if (m.state) setState(m.state, m.msg);
+      if (typeof m.temp === "number") S.temp = m.temp;
+      S.target = typeof m.target === "number" ? m.target : (running() && S.profile && m.t!=null ? interp(S.profile.pts, m.t) : null);
+      if (typeof m.duty === "number") S.duty = m.duty;
+      if (typeof m.t === "number" && running()){
+        const last = S.samples[S.samples.length-1];
+        if (last && m.t < last[0] - 1) S.samples = [];          // novo ciclo
+        if (!last || m.t > last[0]) S.samples.push([m.t, m.temp, S.target, S.duty]);
+        S.t = m.t;
+      }
+      S.rate = typeof m.rate === "number" ? m.rate : (running() ? computeRate() : null);
+      S.phase = m.phase || (S.profile && S.t!=null ? phaseAt(S.profile.pts, S.t) : null);
+      renderReadout(); redraw();
+      break;
+    }
+    case "profile":      // curva que a placa está executando (prevalece sobre a local)
+      if (Array.isArray(m.pts) && m.pts.length > 1){
+        S.profile = { id:"esp", name:m.name || "Perfil da placa", liq:m.liq || null, static:m.mode==="static", pts:m.pts };
+        renderProfileInfo(); redraw();
+      }
+      break;
+    case "history":      // amostras já gravadas (ex.: página recarregada no meio do ciclo)
+      if (Array.isArray(m.samples)){
+        S.samples = m.samples.map(s => [s[0], s[1], s[2] ?? null, s[3] ?? null]);
+        if (S.samples.length) S.t = S.samples[S.samples.length-1][0];
+        renderReadout(); redraw();
+      }
+      break;
+    case "state":
+      setState(m.state, m.msg);
+      break;
+  }
+}
+
+/* =====================================================================
+   CONEXÃO WI-FI (WebSocket em ws://<ip-da-placa>/ws)
+   ===================================================================== */
+let ws = null, wsRetry = 1000, wsTimer = null;
+function wsUrl(){
+  const host = location.hostname || "192.168.4.1";
+  return (location.protocol === "https:" ? "wss://" : "ws://") + host + (location.port ? ":" + location.port : "") + "/ws";
+}
+function connectWS(){
+  if (S.conn === "demo") return;
+  try { ws = new WebSocket(wsUrl()); } catch(e){ return scheduleWS(); }
+  ws.onopen = () => {
+    wsRetry = 1000; S.conn = "ok"; S.lastMsg = performance.now();
+    S.link = { send: o => { try { ws.send(JSON.stringify(o)); } catch(e){} } };
+    S.link.send({ cmd:"hello" });
+    renderConn();
+  };
+  ws.onmessage = ev => { try { handle(JSON.parse(ev.data)); } catch(e){} };
+  ws.onclose = () => {
+    if (S.conn === "demo") return;
+    S.link = null; S.conn = "off"; S.pending = false; renderConn(); scheduleWS();
+  };
+  ws.onerror = () => { try { ws.close(); } catch(e){} };
+}
+function scheduleWS(){
+  clearTimeout(wsTimer);
+  wsTimer = setTimeout(connectWS, wsRetry);
+  wsRetry = Math.min(wsRetry * 1.6, 8000);
+}
+setInterval(() => {
+  if (S.conn === "ok" && performance.now() - S.lastMsg > STALE_MS){ S.conn = "stale"; renderConn(); }
+}, 1000);
+
+/* =====================================================================
+   SIMULAÇÃO (para testar a página sem a placa)
+   ===================================================================== */
+const params = new URLSearchParams(location.search);
+const SIM_SPEED = clamp(+params.get("speed") || 4, 1, 100);
+
+function startSim(){
+  clearTimeout(wsTimer);
+  if (ws){ ws.onclose = null; try { ws.close(); } catch(e){} ws = null; }
+  S.conn = "demo";
+  const plant = { T:27, u:0, uf:0, i:0 };
+  let prof = null, t = 0, state = "idle";
+  const PMAX = 3.2, K = 0.008, TAU = 5;    // modelo térmico de 1ª ordem + atraso
+  const emit = m => setTimeout(() => handle(m), 15);
+
+  S.link = { send(o){
+    if (o.cmd === "start"){
+      prof = o.profile; t = 0; plant.i = 0; state = "running";
+      emit({ type:"profile", name:prof.name, liq:prof.liq, mode:o.mode, pts:prof.pts });
+      emit({ type:"state", state:"running" });
+    } else if (o.cmd === "stop" && state === "running"){
+      state = "stopped"; emit({ type:"state", state:"stopped" });
+    }
+  }};
+
+  const DT = 0.1;
+  setInterval(() => {
+    const steps = Math.round(SIM_SPEED);
+    let sp = null;
+    for (let k = 0; k < steps; k++){
+      let u = 0;
+      if (state === "running"){
+        sp = interp(prof.pts, t);
+        const ahead = interp(prof.pts, t + TAU), slope = (interp(prof.pts, t + TAU + 1) - ahead);
+        const ff = (K * (ahead - TAMB) + slope) / PMAX;
+        const e = sp - plant.T;
+        plant.i = clamp(plant.i + e * DT * 0.004, -0.25, 0.25);
+        u = clamp(ff + 0.05 * e + plant.i, 0, 1);
+        t += DT;
+        if (t >= profEnd(prof)){ state = "done"; emit({ type:"state", state:"done" }); }
+      }
+      plant.u = u;
+      plant.uf += (u - plant.uf) * DT / TAU;
+      plant.T += (PMAX * plant.uf - K * (plant.T - TAMB)) * DT;
+    }
+    const noise = (Math.random() - 0.5) * 0.5;
+    emit({ type:"telemetry", state, t: state === "running" ? +t.toFixed(1) : null,
+           temp: +(plant.T + noise).toFixed(2), target: sp == null ? null : +sp.toFixed(1),
+           duty: +(plant.u * 100).toFixed(0) });
+  }, 100);
+  renderConn();
+}
+$("demoBtn").addEventListener("click", startSim);
+
+/* =====================================================================
+   INÍCIO
+   ===================================================================== */
+renderMute();
+previewProfile();
+renderControls();
+if (location.protocol === "file:" || params.has("demo")) startSim();
+else { renderConn(); connectWS(); }
+</script>
+</body>
+</html>
