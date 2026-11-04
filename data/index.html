@@ -96,7 +96,6 @@ label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mute
 select,input{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 10px;font-size:14px;width:100%}
 select:disabled,input:disabled{opacity:.55}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.filebar{margin-top:10px}
 .link{background:none;border:0;padding:6px 0 0;font-size:12px;color:var(--muted);text-decoration:underline;text-align:left}
 .pinfo{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.6}
 .primary{border:0;border-radius:11px;padding:13px;font-size:15px;font-weight:650;background:var(--ember);color:#1a0d06;transition:filter .15s}
@@ -139,6 +138,20 @@ select:disabled,input:disabled{opacity:.55}
 .fname{background:var(--panel2);border-radius:9px;padding:9px 10px;font-family:var(--mono);font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .dlg-actions{display:flex;justify-content:flex-end;gap:8px}
 .dlg-actions .primary{border-radius:9px;padding:7px 16px;font-size:13px}
+
+/* ---------- editor de curva ---------- */
+.wide{width:100%;margin-top:10px}
+.edbar{display:flex;flex-direction:column;gap:10px;padding:8px 16px 14px}
+.edtools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.edadd{border:0;border-radius:9px;padding:8px 14px;font-size:13px;font-weight:650;background:var(--ember);color:#1a0d06}
+.edadd:disabled{opacity:.5;cursor:default}
+.ednav{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px;color:var(--muted);font-family:var(--mono)}
+.ednav .icon:disabled{opacity:.45;cursor:default}
+.edfields{display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:10px}
+.edmsg{margin:0;font-size:12px;line-height:1.5;color:var(--muted)}
+.edmsg.warn{color:var(--warn)} .edmsg.bad{color:#f6c3c9}
+#paneEditor{display:flex;flex-direction:column;gap:12px}
+@media (max-width:480px){ .edfields{grid-template-columns:1fr 1fr} .edfields label:last-child{grid-column:1/-1} }
 
 @media (max-width:900px){
   .grid{grid-template-columns:1fr;padding:12px}
@@ -189,9 +202,30 @@ select:disabled,input:disabled{opacity:.55}
       <canvas id="chart"></canvas>
       <div id="tip" class="tip" hidden></div>
     </div>
-    <div class="card-foot">
+    <div id="cardFoot" class="card-foot">
       <span id="footInfo">Aguardando início do ciclo</span>
       <button id="csvBtn" class="ghost" disabled>Baixar log (CSV)</button>
+    </div>
+    <div id="edBar" class="edbar" hidden>
+      <div class="edtools">
+        <button id="edAdd" class="edadd" type="button">+ Adicionar ponto</button>
+        <button id="edDel" class="ghost" type="button">Remover ponto</button>
+        <div class="ednav">
+          <button id="edPrev" class="icon" type="button" title="Ponto anterior" aria-label="Ponto anterior">‹</button>
+          <span id="edPos" aria-live="polite"></span>
+          <button id="edNext" class="icon" type="button" title="Próximo ponto" aria-label="Próximo ponto">›</button>
+        </div>
+      </div>
+      <div class="edfields">
+        <label>Tempo (s)<input id="edTime" type="number" min="0" max="7200" step="1"></label>
+        <label>Temperatura (°C)<input id="edTemp" type="number" min="0" max="300" step="1"></label>
+        <label>Fase do trecho até aqui<input id="edPhase" type="text" maxlength="19" list="edPhases" placeholder="Opcional" autocomplete="off"></label>
+      </div>
+      <datalist id="edPhases">
+        <option value="Pré-aquec."></option><option value="Imersão"></option><option value="Rampa"></option>
+        <option value="Refusão"></option><option value="Resfriamento"></option>
+      </datalist>
+      <p id="edHint" class="edmsg"></p>
     </div>
   </section>
 
@@ -221,12 +255,6 @@ select:disabled,input:disabled{opacity:.55}
         <label>Perfil
           <select id="profileSel"></select>
         </label>
-        <div class="row2 filebar">
-          <button id="loadBtn" class="ghost" type="button" title="Arquivo .xlsx ou .csv">Carregar do PC</button>
-          <button id="tplBtn" class="ghost" type="button">Baixar modelo</button>
-        </div>
-        <button id="delBtn" class="link" type="button" hidden>Remover esta curva da lista</button>
-        <input id="fileIn" type="file" accept=".xlsx,.csv,.txt" hidden>
       </div>
       <div id="paneStatic" hidden>
         <div class="row2">
@@ -234,8 +262,26 @@ select:disabled,input:disabled{opacity:.55}
           <label>Tempo (min)<input id="stTime" type="number" value="5" min="1" max="120" step="1"></label>
         </div>
       </div>
-      <div id="profInfo" class="pinfo"></div>
+      <div id="paneEditor" hidden>
+        <label>Nome da curva<input id="edName" type="text" maxlength="47" placeholder="Minha curva" autocomplete="off"></label>
+        <label>Liquidus (°C, opcional)<input id="edLiq" type="number" min="1" max="300" step="1" placeholder="Ex.: 217"></label>
+        <div id="edInfo" class="pinfo"></div>
+        <p id="edWarn" class="edmsg warn" hidden></p>
+        <p id="edErr" class="edmsg bad" role="alert" hidden></p>
+        <button id="edSave" class="primary" type="button">Salvar curva</button>
+        <button id="edCancel" class="ghost" type="button">Cancelar</button>
+      </div>
       <button id="startBtn" class="primary">Iniciar</button>
+      <div id="profInfo" class="pinfo"></div>
+      <div id="paneTools">
+        <div class="row2">
+          <button id="loadBtn" class="ghost" type="button" title="Arquivo .xlsx ou .csv">Carregar do PC</button>
+          <button id="tplBtn" class="ghost" type="button">Baixar modelo</button>
+        </div>
+        <button id="newBtn" class="ghost wide" type="button">Criar curva nova</button>
+        <button id="delBtn" class="link" type="button" hidden>Remover esta curva da lista</button>
+        <input id="fileIn" type="file" accept=".xlsx,.csv,.txt" hidden>
+      </div>
     </section>
   </aside>
 </main>
@@ -267,11 +313,11 @@ select:disabled,input:disabled{opacity:.55}
     <label>Nome do arquivo
       <input id="tplName" type="text" maxlength="47" value="modelo-curva" placeholder="modelo-curva" autocomplete="off">
     </label>
-    <label>Tipo de curva
+    <label id="tplCurveRow">Tipo de curva
       <select id="tplCurve"></select>
     </label>
     <label class="check"><input id="tplAddCurve" type="checkbox"> Adicionar o tipo de curva ao nome</label>
-    <label class="check"><input id="tplAddDate" type="checkbox"> Adicionar a data ao nome</label>
+    <label class="check"><input id="tplAddDate" type="checkbox"> <span id="tplDateLbl">Adicionar a data ao nome</span></label>
     <div id="tplPreview" class="fname"></div>
     <div class="dlg-actions">
       <button id="tplCancel" class="ghost" type="button">Cancelar</button>
@@ -288,6 +334,7 @@ select:disabled,input:disabled{opacity:.55}
 const HOT_C = 50;          // acima disso: aviso de superfície quente
 const STALE_MS = 4000;     // sem telemetria por esse tempo => "sem dados"
 const TAMB = 25;
+const AFTER_MAX_S = 7200;  // depois do fim do ciclo, o gráfico continua por até 2 h
 
 // Perfis padrão. pts = [tempo_s, temperatura_C, "fase do trecho que termina neste ponto"]
 const PROFILES = [
@@ -309,7 +356,10 @@ const S = {
   mode:"curve", profile:null, samples:[], // samples: [t, temp, alvo, duty]
   state:"idle", temp:null, target:null, duty:0, t:null, rate:null, phase:null,
   link:null, conn:"connecting", lastMsg:0, pending:false, muted:false, hoverX:null,
+  after:null,   // registro depois do fim do ciclo: { t0: tempo da última amostra, at: relógio nesse instante }
 };
+// Editor de curva. pts = [{t, T, fase}] sempre em ordem de tempo; null = nenhum rascunho.
+const ED = { open:false, pts:null, sel:null, drag:null, xMax:360 };
 const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 const fmtTime = s => { s = Math.max(0, Math.round(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
@@ -342,6 +392,8 @@ function phaseBands(pts){
 }
 const profEnd  = p => p ? p.pts[p.pts.length-1][0] : 0;
 const profPeak = p => p ? Math.max(...p.pts.map(x=>x[1])) : 0;
+// valor planejado no instante t; depois do fim da curva não há valor planejado
+const plannedAt = t => S.profile && t <= profEnd(S.profile) ? interp(S.profile.pts, t) : null;
 
 function staticProfile(T, min){
   T = clamp(Math.round(+T||150), 30, 300); min = clamp(+min||5, 1, 120);
@@ -356,6 +408,7 @@ function selectedProfile(){
 
 /* ---------- curvas carregadas do PC (.xlsx / .csv) ---------- */
 const MAX_C = 300, MAX_PTS = 20;   // limites aceitos pelo firmware
+const MAX_CUSTOM = 10;             // curvas guardadas neste navegador
 const CUSTOM_KEY = "reflow.custom";
 let CUSTOM = (() => { try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || "[]"); } catch(e){ return []; } })();
 const saveCustom = () => { try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(CUSTOM)); } catch(e){} };
@@ -478,15 +531,16 @@ function draw(){
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,w,h);
 
-  const P = S.profile, sm = S.samples;
+  const P = ED.open ? edProfile() : S.profile, sm = ED.open ? [] : S.samples;
   const lastT = sm.length ? sm[sm.length-1][0] : 0;
   const end = profEnd(P) || 300;
-  const xStep = niceStepX(Math.max(end, lastT));
-  const xMax = Math.ceil(Math.max(end*1.04, lastT*1.03 + 5) / xStep) * xStep;
-  let peak = Math.max(profPeak(P), 100);
+  // no editor a escala fica fixa, senão o gráfico se mexeria embaixo do ponto arrastado
+  const xStep = niceStepX(ED.open ? ED.xMax : Math.max(end, lastT));
+  const xMax = ED.open ? ED.xMax : Math.ceil(Math.max(end*1.04, lastT*1.03 + 5) / xStep) * xStep;
+  let peak = ED.open ? MAX_C : Math.max(profPeak(P), 100);
   for (const s of sm) if (s[1] > peak) peak = s[1];
   const yStep = peak > 160 ? 50 : 25;
-  const yMax = Math.ceil((peak + yStep*0.5) / yStep) * yStep;
+  const yMax = ED.open ? MAX_C : Math.ceil((peak + yStep*0.5) / yStep) * yStep;
 
   const pad = { l:44, r:14, t:22, b:26 };
   const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
@@ -565,6 +619,21 @@ function draw(){
     ctx.fillStyle = C.ember; ctx.beginPath(); ctx.arc(x,y,4,0,7); ctx.fill();
   }
 
+  // pontos do editor de curva
+  if (ED.open){
+    for (const p of ED.pts){
+      const on = p === ED.sel;
+      ctx.beginPath(); ctx.arc(X(p.t), Y(p.T), on ? 7 : 5, 0, 7);
+      ctx.fillStyle = on ? C.ember : C.ideal; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = on ? C.text : "#0e1013"; ctx.stroke();
+    }
+    const s = ED.sel, txt = `${fmtTime(s.t)} · ${s.T} °C`, tw = ctx.measureText(txt).width;
+    const lx = clamp(X(s.t) - tw/2, pad.l + 5, pad.l + pw - tw - 5);
+    const ly = Y(s.T) - 20 < pad.t + 8 ? Y(s.T) + 20 : Y(s.T) - 20;
+    ctx.fillStyle = "rgba(14,16,19,.88)"; ctx.fillRect(lx - 5, ly - 9, tw + 10, 18);
+    ctx.fillStyle = C.text; ctx.textAlign = "left"; ctx.fillText(txt, lx, ly);
+  }
+
   // cursor (hover/toque)
   updateTip();
 }
@@ -577,12 +646,12 @@ function nearestSample(t){
 }
 function updateTip(){
   const tip = $("tip");
-  if (S.hoverX==null || !geo){ tip.hidden = true; return; }
+  if (ED.open || S.hoverX==null || !geo){ tip.hidden = true; return; }
   const { X, Y, xMax, pad, pw, ph } = geo;
   const t = clamp((S.hoverX - pad.l)/pw*xMax, 0, xMax);
   const s = nearestSample(t);
   const tt = s && Math.abs(s[0]-t) < xMax*0.03 ? s[0] : t;
-  const ideal = S.profile ? interp(S.profile.pts, tt) : null;
+  const ideal = plannedAt(tt);
   if (tt > profEnd(S.profile) && !s){ tip.hidden = true; return; }
 
   const x = X(tt);
@@ -652,7 +721,7 @@ function renderControls(){
   btn.disabled = S.pending || !canTalk;
   const lock = running() || S.pending;
   document.querySelectorAll(".tab").forEach(b => b.disabled = lock);
-  ["profileSel","stTemp","stTime","loadBtn","delBtn"].forEach(id => $(id).disabled = lock);
+  ["profileSel","stTemp","stTime","loadBtn","delBtn","newBtn"].forEach(id => $(id).disabled = lock);
 }
 
 function renderProfileInfo(){
@@ -686,7 +755,7 @@ function previewProfile(){
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
   S.mode = b.dataset.mode;
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x===b));
-  $("paneCurve").hidden = S.mode !== "curve";
+  $("paneCurve").hidden = $("paneTools").hidden = S.mode !== "curve";
   $("paneStatic").hidden = S.mode !== "static";
   S.samples = []; S.state = S.state==="running" ? S.state : "idle";
   previewProfile(); renderControls();
@@ -694,7 +763,7 @@ document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () =>
 function profileOptions(){
   const opt = p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`;
   return PROFILES.map(opt).join("") +
-    (CUSTOM.length ? `<optgroup label="Carregadas do PC">${CUSTOM.map(opt).join("")}</optgroup>` : "");
+    (CUSTOM.length ? `<optgroup label="Minhas curvas">${CUSTOM.map(opt).join("")}</optgroup>` : "");
 }
 function fillSelect(selId){
   $("profileSel").innerHTML = profileOptions();
@@ -714,7 +783,7 @@ $("fileIn").addEventListener("change", async e => {
     const buf = await f.arrayBuffer();
     const rows = /\.xlsx$/i.test(f.name) ? await readXlsx(buf) : parseCsv(decodeText(buf));
     const p = rowsToProfile(rows, f.name);
-    CUSTOM = [p, ...CUSTOM.filter(c => c.name !== p.name)].slice(0, 10);
+    CUSTOM = [p, ...CUSTOM.filter(c => c.name !== p.name)].slice(0, MAX_CUSTOM);
     saveCustom(); fillSelect(p.id);
     S.samples = []; S.state = "idle"; previewProfile(); renderControls();
     toast(`Curva "${p.name}" carregada (${p.pts.length} pontos).`, "ok");
@@ -728,22 +797,31 @@ $("delBtn").addEventListener("click", () => {
   S.samples = []; S.state = "idle"; previewProfile(); renderControls();
 });
 
-/* ---------- baixar modelo ---------- */
-const TPL_DEFAULT = "modelo-curva";
+/* ---------- janela de download: modelo de curva ou log do ciclo ---------- */
+const TPL_DEFAULT = "modelo-curva", LOG_DEFAULT = "reflow-log";
+const DLG = { mode:"tpl",     // cada modo lembra as próprias opções
+  tpl:{ name:TPL_DEFAULT, curve:false, date:false },
+  log:{ name:LOG_DEFAULT, curve:false, date:true } };
+const isLogDlg = () => DLG.mode === "log";
 const cleanFileName = s => String(s).replace(/[\\/:*?"<>|\x00-\x1f]/g, "").trim().replace(/\.csv$/i, "").replace(/[. ]+$/, "");
-const tplBaseName = () => cleanFileName($("tplName").value) || TPL_DEFAULT;
-const tplProfile = () => allProfiles().find(p => p.id === $("tplCurve").value) || PROFILES[0];
+const tplBaseName = () => cleanFileName($("tplName").value) || (isLogDlg() ? LOG_DEFAULT : TPL_DEFAULT);
+const tplProfile = () => isLogDlg() ? S.profile : allProfiles().find(p => p.id === $("tplCurve").value) || PROFILES[0];
+const two = n => String(n).padStart(2, "0");
 function localDate(){   // data do PC (toISOString usaria UTC e viraria o dia à noite no Brasil)
-  const d = new Date(), two = n => String(n).padStart(2, "0");
+  const d = new Date();
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
+function localDateTime(){
+  const d = new Date();
+  return `${localDate()}-${two(d.getHours())}-${two(d.getMinutes())}`;
+}
 function tplFileName(){
-  const parts = [tplBaseName()];
-  if ($("tplAddCurve").checked){
-    const curve = cleanFileName(tplProfile().name.replace(/\s*\(.*?\)/g, ""));   // "SAC305 (sem chumbo)" -> "SAC305"
-    if (curve) parts.push(curve);
+  const parts = [tplBaseName()], p = tplProfile();
+  if ($("tplAddCurve").checked && p){
+    const curve = cleanFileName(p.name.replace(/\s*\(.*?\)/g, ""));   // "SAC305 (sem chumbo)" -> "SAC305"
+    if (curve && curve !== parts[0]) parts.push(curve);
   }
-  if ($("tplAddDate").checked) parts.push(localDate());
+  if ($("tplAddDate").checked) parts.push(isLogDlg() ? localDateTime() : localDate());
   return parts.join("-") + ".csv";
 }
 function tplCsv(){
@@ -756,23 +834,195 @@ function tplCsv(){
 }
 const renderTplPreview = () => { $("tplPreview").textContent = tplFileName(); };
 
-$("tplBtn").addEventListener("click", () => {
-  $("tplCurve").innerHTML = profileOptions();
-  $("tplCurve").value = $("profileSel").value;   // começa na curva escolhida no painel
+function showDlg(mode, title, cancelLabel, name){
+  DLG.mode = mode;
+  const o = DLG[mode], log = isLogDlg();
+  $("tplTitle").textContent = title;
+  $("tplCancel").textContent = cancelLabel;
+  $("tplName").value = name || o.name;
+  $("tplName").placeholder = log ? LOG_DEFAULT : TPL_DEFAULT;
+  $("tplAddCurve").checked = o.curve;
+  $("tplAddDate").checked = o.date;
+  $("tplCurveRow").hidden = log;      // o log é sempre da curva do ciclo
+  $("tplDateLbl").textContent = log ? "Adicionar a data e a hora ao nome" : "Adicionar a data ao nome";
   renderTplPreview();
   $("tplDlg").showModal();
   $("tplName").select();
+}
+// savedName: nome da curva recém-criada (a janela vira a oferta de baixá-la)
+function openTplDlg(curveId, savedName){
+  $("tplCurve").innerHTML = profileOptions();
+  $("tplCurve").value = curveId;
+  showDlg("tpl", savedName ? `Curva "${savedName}" salva. Quer baixar?` : "Baixar modelo",
+          savedName ? "Agora não" : "Cancelar", savedName && (cleanFileName(savedName) || TPL_DEFAULT));
+}
+$("tplBtn").addEventListener("click", () => openTplDlg($("profileSel").value));   // começa na curva do painel
+$("tplDlg").addEventListener("close", () => {
+  DLG[DLG.mode] = { name:$("tplName").value, curve:$("tplAddCurve").checked, date:$("tplAddDate").checked };
 });
 $("tplForm").addEventListener("input", renderTplPreview);
 $("tplCancel").addEventListener("click", () => $("tplDlg").close());
 $("tplForm").addEventListener("submit", e => {
   e.preventDefault();
-  const blob = new Blob(["﻿" + tplCsv().join("\r\n")], { type:"text/csv;charset=utf-8" });
+  const blob = new Blob(["﻿" + (isLogDlg() ? logCsv() : tplCsv()).join("\r\n")], { type:"text/csv;charset=utf-8" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = tplFileName();
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   $("tplDlg").close();
 });
 ["profileSel","stTemp","stTime"].forEach(id => $(id).addEventListener("input", () => { S.samples=[]; S.state="idle"; previewProfile(); renderControls(); }));
+
+/* ---------- criar curva arrastando pontos no gráfico ---------- */
+const ED_SNAP_S = 5;      // arrastar anda de 5 em 5 s (digitando dá para usar qualquer valor)
+const ED_MAX_S = 7200;    // duração máxima
+const ED_WARN_RATE = 3;   // °C/s: subida acima disso gera um aviso
+
+function edProfile(){
+  const liq = num($("edLiq").value);
+  return { name:$("edName").value.trim(), liq: liq > 0 ? liq : null, pts:ED.pts.map(p => [p.t, p.T, p.fase]) };
+}
+function edRescale(){     // deixa sobrar espaço à direita para o próximo ponto
+  const end = ED.pts[ED.pts.length-1].t;
+  const span = Math.max(360, end*1.25, end + 60), step = niceStepX(span);
+  ED.xMax = Math.ceil(span/step) * step;
+}
+function edMove(p, t, T){
+  p.T = clamp(Math.round(T*10)/10, 0, MAX_C);
+  if (p === ED.pts[0]) return;   // o primeiro ponto fica sempre em 0 s
+  t = clamp(Math.round(t), 1, ED_MAX_S);
+  const dir = t >= ED_MAX_S ? -1 : 1;
+  while (ED.pts.some(o => o !== p && o.t === t)) t += dir;   // dois pontos não podem ter o mesmo tempo
+  p.t = t;
+  ED.pts.sort((a, b) => a.t - b.t);
+}
+function edErr(msg){ $("edErr").textContent = msg || ""; $("edErr").hidden = !msg; }
+function edRender(){
+  const n = ED.pts.length, i = ED.pts.indexOf(ED.sel), first = i === 0;
+  $("edTime").value = ED.sel.t; $("edTemp").value = ED.sel.T; $("edPhase").value = ED.sel.fase;
+  $("edTime").disabled = $("edPhase").disabled = $("edDel").disabled = first;
+  $("edAdd").disabled = n >= MAX_PTS;
+  $("edPrev").disabled = first; $("edNext").disabled = i === n-1;
+  $("edPos").textContent = `Ponto ${i+1} de ${n}`;
+  $("edHint").textContent =
+    n >= MAX_PTS ? `Limite de ${MAX_PTS} pontos atingido.` :
+    n < 2 ? 'Clique em "Adicionar ponto". Depois, arraste o ponto no gráfico ou digite os valores.' :
+    first ? "O primeiro ponto fica sempre em 0 s: só a temperatura dele muda." :
+    "Arraste os pontos no gráfico ou digite os valores. Clique em um ponto para selecioná-lo.";
+  let rate = 0;
+  for (let k = 1; k < n; k++) rate = Math.max(rate, (ED.pts[k].T - ED.pts[k-1].T)/(ED.pts[k].t - ED.pts[k-1].t));
+  const p = edProfile();
+  $("edInfo").textContent = n < 2 ? "" :
+    `${n} pontos · pico ${profPeak(p)} °C · duração ${fmtTime(profEnd(p))} · subida máx. ${rate.toFixed(1).replace(".", ",")} °C/s`;
+  $("edWarn").hidden = rate <= ED_WARN_RATE;
+  $("edWarn").textContent = `Um trecho sobe mais de ${ED_WARN_RATE} °C/s, acima do que as pastas de solda costumam recomendar. A placa também pode não acompanhar.`;
+}
+const edRefresh = () => { edErr(""); edRescale(); edRender(); redraw(); };
+function edShow(open){
+  ED.open = open;
+  document.querySelector(".tabs").hidden = open;
+  $("paneCurve").hidden = $("paneTools").hidden = open || S.mode !== "curve";
+  $("paneStatic").hidden = open || S.mode !== "static";
+  $("profInfo").hidden = $("startBtn").hidden = $("cardFoot").hidden = open;
+  $("paneEditor").hidden = $("edBar").hidden = !open;
+  canvas.style.touchAction = open ? "none" : "";   // no celular, o dedo arrasta o ponto em vez de rolar a página
+  canvas.style.cursor = "";
+  ED.drag = null;
+  if (open){ $("profName").textContent = "Criando curva nova"; edRefresh(); }
+  else { renderProfileInfo(); redraw(); }
+}
+
+$("newBtn").addEventListener("click", () => {
+  if (CUSTOM.length >= MAX_CUSTOM) return toast(`A lista já tem ${MAX_CUSTOM} curvas. Remova uma para criar outra.`, "bad");
+  if (!ED.pts){
+    ED.pts = [{ t:0, T:TAMB, fase:"" }]; ED.sel = ED.pts[0];
+    $("edName").value = ""; $("edLiq").value = "";
+  }
+  edShow(true);
+});
+$("edAdd").addEventListener("click", () => {
+  if (ED.pts.length >= MAX_PTS) return;
+  const last = ED.pts[ED.pts.length-1], p = { t:last.t, T:last.T, fase:"" };
+  ED.pts.push(p); edMove(p, last.t + 60, last.T); ED.sel = p;
+  edRefresh();
+});
+$("edDel").addEventListener("click", () => {
+  const i = ED.pts.indexOf(ED.sel);
+  if (i < 1) return;
+  ED.pts.splice(i, 1); ED.sel = ED.pts[i] || ED.pts[i-1];
+  edRefresh();
+});
+$("edPrev").addEventListener("click", () => { ED.sel = ED.pts[Math.max(0, ED.pts.indexOf(ED.sel)-1)]; edRender(); redraw(); });
+$("edNext").addEventListener("click", () => { ED.sel = ED.pts[Math.min(ED.pts.length-1, ED.pts.indexOf(ED.sel)+1)]; edRender(); redraw(); });
+$("edTime").addEventListener("change", e => { const v = num(e.target.value); if (v != null) edMove(ED.sel, v, ED.sel.T); edRefresh(); });
+$("edTemp").addEventListener("change", e => { const v = num(e.target.value); if (v != null) edMove(ED.sel, ED.sel.t, v); edRefresh(); });
+$("edPhase").addEventListener("change", e => { ED.sel.fase = e.target.value.trim().slice(0, 19); edRefresh(); });
+$("edName").addEventListener("input", () => edErr(""));
+$("edLiq").addEventListener("input", () => { edErr(""); edRender(); redraw(); });
+$("edCancel").addEventListener("click", () => {
+  if (ED.pts.length > 1 && !confirm("Descartar esta curva?")) return;
+  edErr(""); edShow(false); ED.pts = ED.sel = null;
+});
+$("edSave").addEventListener("click", () => {
+  const name = $("edName").value.trim(), liq = num($("edLiq").value);
+  if (ED.pts.length < 2) return edErr("Adicione pelo menos mais um ponto.");
+  if (!name){ edErr("Dê um nome para a curva."); $("edName").focus(); return; }
+  if (allProfiles().some(c => c.name.toLowerCase() === name.toLowerCase()))
+    return edErr(`Já existe uma curva chamada "${name}". Escolha outro nome.`);
+  if (liq != null && (liq <= 0 || liq > MAX_C)) return edErr(`O liquidus precisa estar entre 1 e ${MAX_C} °C.`);
+  let p;
+  try {
+    p = rowsToProfile([["Nome", name], ["Liquidus", liq], ...ED.pts.map(o => [o.t, o.T, o.fase])], name);
+  } catch(err){ return edErr("Não foi possível salvar: " + err.message); }
+  CUSTOM = [p, ...CUSTOM].slice(0, MAX_CUSTOM);
+  saveCustom();
+  edErr(""); edShow(false); ED.pts = ED.sel = null;
+  fillSelect(p.id);
+  S.samples = []; S.state = "idle"; previewProfile(); renderControls();
+  openTplDlg(p.id, p.name);
+});
+
+// arrastar os pontos no gráfico (mouse e toque)
+function edAt(e){ const r = canvas.getBoundingClientRect(); return { x:e.clientX - r.left, y:e.clientY - r.top }; }
+function edHit(e){
+  if (!geo) return null;
+  const { x, y } = edAt(e);
+  let best = null, dist = e.pointerType === "touch" ? 24 : 14;
+  for (const p of ED.pts){
+    const d = Math.hypot(geo.X(p.t) - x, geo.Y(p.T) - y);
+    if (d <= dist){ dist = d; best = p; }
+  }
+  return best;
+}
+canvas.addEventListener("pointerdown", e => {
+  if (!ED.open) return;
+  const p = edHit(e); if (!p) return;
+  const { x, y } = edAt(e);
+  e.preventDefault();
+  ED.sel = p;
+  ED.drag = { x, y, dx:geo.X(p.t) - x, dy:geo.Y(p.T) - y, moved:false };   // mantém a distância entre o dedo e o ponto
+  canvas.setPointerCapture(e.pointerId);
+  canvas.style.cursor = "grabbing";
+  edRender(); redraw();
+});
+canvas.addEventListener("pointermove", e => {
+  if (!ED.open) return;
+  const dr = ED.drag;
+  if (!dr){ canvas.style.cursor = edHit(e) ? "grab" : ""; return; }
+  const { x, y } = edAt(e);
+  if (!dr.moved && Math.hypot(x - dr.x, y - dr.y) < 4) return;   // um toque só seleciona, sem mover
+  dr.moved = true;
+  const { xMax, yMax, pad, pw, ph } = geo;
+  const t = clamp((x + dr.dx - pad.l)/pw*xMax, 0, xMax);
+  const T = (pad.t + ph - (y + dr.dy))/ph*yMax;
+  edMove(ED.sel, Math.round(t/ED_SNAP_S)*ED_SNAP_S, Math.round(T));
+  edRender(); redraw();
+});
+function edEndDrag(){
+  if (!ED.drag) return;
+  ED.drag = null; canvas.style.cursor = "";
+  edRefresh();    // só agora a escala se ajusta
+}
+canvas.addEventListener("pointerup", edEndDrag);
+canvas.addEventListener("pointercancel", edEndDrag);
 
 /* ---------- iniciar / parar ---------- */
 let pendingTimer = null;
@@ -795,21 +1045,16 @@ $("startBtn").addEventListener("click", () => {
 });
 
 /* ---------- CSV ---------- */
-$("csvBtn").addEventListener("click", () => {
+function logCsv(){
   const n = v => v==null ? "" : String(+v.toFixed(2)).replace(".", ",");
-  const lines = [
+  return [
     `# Perfil;${S.profile ? S.profile.name : ""}`,
     `# Data;${new Date().toLocaleString("pt-BR")}`,
     "tempo_s;temperatura_C;planejada_C;alvo_C;duty_pct",
-    ...S.samples.map(s => [n(s[0]), n(s[1]), n(S.profile ? interp(S.profile.pts, s[0]) : null), n(s[2]), n(s[3])].join(";"))
+    ...S.samples.map(s => [n(s[0]), n(s[1]), n(plannedAt(s[0])), n(s[2]), n(s[3])].join(";"))
   ];
-  const blob = new Blob(["﻿" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,"-");
-  a.href = URL.createObjectURL(blob); a.download = `reflow-${stamp}.csv`;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-});
+}
+$("csvBtn").addEventListener("click", () => showDlg("log", "Baixar log", "Cancelar"));
 
 /* ---------- som / aviso ---------- */
 let actx = null;
@@ -849,7 +1094,13 @@ $("toastOk").addEventListener("click", () => { $("toast").hidden = true; documen
 function setState(st, msg){
   if (!st || st === S.state) return;
   const prev = S.state; S.state = st;
+  S.after = prev === "running" && st !== "running" && S.samples.length
+    ? { t0:S.samples[S.samples.length-1][0], at:performance.now() } : null;
   if (st === "running"){ S.pending = false; clearTimeout(pendingTimer); if (prev !== "running" && S.samples.length && S.t === 0) S.samples = []; }
+  if (st === "running" && ED.open){   // o ciclo precisa aparecer na tela; o rascunho continua guardado
+    edShow(false);
+    toast('Um ciclo começou. Sua curva não foi perdida: clique em "Criar curva nova" depois para continuar.', "bad", true);
+  }
   if (st === "done"){
     S.pending = false;
     toast("Ciclo concluído. Cuidado: a placa ainda está quente.", "ok", true);
@@ -874,6 +1125,18 @@ function computeRate(){
   return dt > 0 ? (last[1] - sm[i][1]) / dt : null;
 }
 
+// Depois do ciclo o firmware manda t:null, então o tempo vem do relógio do navegador.
+function logAfterCycle(m){
+  const a = S.after;
+  if (!a) return;
+  if (!S.samples.length || S.pending){ S.after = null; return; }   // novo ciclo ou troca de curva
+  const t = a.t0 + (performance.now() - a.at)/1000 * (S.conn === "demo" ? SIM_SPEED : 1);
+  if (t - a.t0 > AFTER_MAX_S){ S.after = null; return; }
+  if (typeof m.temp !== "number" || t - S.samples[S.samples.length-1][0] < 1) return;
+  S.t = +t.toFixed(1);
+  S.samples.push([S.t, m.temp, null, S.duty]);
+}
+
 function handle(m){
   if (!m || typeof m !== "object") return;
   S.lastMsg = performance.now();
@@ -890,7 +1153,8 @@ function handle(m){
         if (!last || m.t > last[0]) S.samples.push([m.t, m.temp, S.target, S.duty]);
         S.t = m.t;
       }
-      S.rate = typeof m.rate === "number" ? m.rate : (running() ? computeRate() : null);
+      logAfterCycle(m);
+      S.rate = typeof m.rate === "number" ? m.rate : (running() || S.after ? computeRate() : null);
       S.phase = m.phase || (S.profile && S.t!=null ? phaseAt(S.profile.pts, S.t) : null);
       renderReadout(); redraw();
       break;
