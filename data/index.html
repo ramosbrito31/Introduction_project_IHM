@@ -96,7 +96,6 @@ label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mute
 select,input{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 10px;font-size:14px;width:100%}
 select:disabled,input:disabled{opacity:.55}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.filebar{margin-top:10px}
 .link{background:none;border:0;padding:6px 0 0;font-size:12px;color:var(--muted);text-decoration:underline;text-align:left}
 .pinfo{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.6}
 .primary{border:0;border-radius:11px;padding:13px;font-size:15px;font-weight:650;background:var(--ember);color:#1a0d06;transition:filter .15s}
@@ -256,13 +255,6 @@ select:disabled,input:disabled{opacity:.55}
         <label>Perfil
           <select id="profileSel"></select>
         </label>
-        <div class="row2 filebar">
-          <button id="loadBtn" class="ghost" type="button" title="Arquivo .xlsx ou .csv">Carregar do PC</button>
-          <button id="tplBtn" class="ghost" type="button">Baixar modelo</button>
-        </div>
-        <button id="newBtn" class="ghost wide" type="button">Criar curva nova</button>
-        <button id="delBtn" class="link" type="button" hidden>Remover esta curva da lista</button>
-        <input id="fileIn" type="file" accept=".xlsx,.csv,.txt" hidden>
       </div>
       <div id="paneStatic" hidden>
         <div class="row2">
@@ -279,8 +271,17 @@ select:disabled,input:disabled{opacity:.55}
         <button id="edSave" class="primary" type="button">Salvar curva</button>
         <button id="edCancel" class="ghost" type="button">Cancelar</button>
       </div>
-      <div id="profInfo" class="pinfo"></div>
       <button id="startBtn" class="primary">Iniciar</button>
+      <div id="profInfo" class="pinfo"></div>
+      <div id="paneTools">
+        <div class="row2">
+          <button id="loadBtn" class="ghost" type="button" title="Arquivo .xlsx ou .csv">Carregar do PC</button>
+          <button id="tplBtn" class="ghost" type="button">Baixar modelo</button>
+        </div>
+        <button id="newBtn" class="ghost wide" type="button">Criar curva nova</button>
+        <button id="delBtn" class="link" type="button" hidden>Remover esta curva da lista</button>
+        <input id="fileIn" type="file" accept=".xlsx,.csv,.txt" hidden>
+      </div>
     </section>
   </aside>
 </main>
@@ -312,11 +313,11 @@ select:disabled,input:disabled{opacity:.55}
     <label>Nome do arquivo
       <input id="tplName" type="text" maxlength="47" value="modelo-curva" placeholder="modelo-curva" autocomplete="off">
     </label>
-    <label>Tipo de curva
+    <label id="tplCurveRow">Tipo de curva
       <select id="tplCurve"></select>
     </label>
     <label class="check"><input id="tplAddCurve" type="checkbox"> Adicionar o tipo de curva ao nome</label>
-    <label class="check"><input id="tplAddDate" type="checkbox"> Adicionar a data ao nome</label>
+    <label class="check"><input id="tplAddDate" type="checkbox"> <span id="tplDateLbl">Adicionar a data ao nome</span></label>
     <div id="tplPreview" class="fname"></div>
     <div class="dlg-actions">
       <button id="tplCancel" class="ghost" type="button">Cancelar</button>
@@ -333,6 +334,7 @@ select:disabled,input:disabled{opacity:.55}
 const HOT_C = 50;          // acima disso: aviso de superfície quente
 const STALE_MS = 4000;     // sem telemetria por esse tempo => "sem dados"
 const TAMB = 25;
+const AFTER_MAX_S = 7200;  // depois do fim do ciclo, o gráfico continua por até 2 h
 
 // Perfis padrão. pts = [tempo_s, temperatura_C, "fase do trecho que termina neste ponto"]
 const PROFILES = [
@@ -354,6 +356,7 @@ const S = {
   mode:"curve", profile:null, samples:[], // samples: [t, temp, alvo, duty]
   state:"idle", temp:null, target:null, duty:0, t:null, rate:null, phase:null,
   link:null, conn:"connecting", lastMsg:0, pending:false, muted:false, hoverX:null,
+  after:null,   // registro depois do fim do ciclo: { t0: tempo da última amostra, at: relógio nesse instante }
 };
 // Editor de curva. pts = [{t, T, fase}] sempre em ordem de tempo; null = nenhum rascunho.
 const ED = { open:false, pts:null, sel:null, drag:null, xMax:360 };
@@ -389,6 +392,8 @@ function phaseBands(pts){
 }
 const profEnd  = p => p ? p.pts[p.pts.length-1][0] : 0;
 const profPeak = p => p ? Math.max(...p.pts.map(x=>x[1])) : 0;
+// valor planejado no instante t; depois do fim da curva não há valor planejado
+const plannedAt = t => S.profile && t <= profEnd(S.profile) ? interp(S.profile.pts, t) : null;
 
 function staticProfile(T, min){
   T = clamp(Math.round(+T||150), 30, 300); min = clamp(+min||5, 1, 120);
@@ -646,7 +651,7 @@ function updateTip(){
   const t = clamp((S.hoverX - pad.l)/pw*xMax, 0, xMax);
   const s = nearestSample(t);
   const tt = s && Math.abs(s[0]-t) < xMax*0.03 ? s[0] : t;
-  const ideal = S.profile ? interp(S.profile.pts, tt) : null;
+  const ideal = plannedAt(tt);
   if (tt > profEnd(S.profile) && !s){ tip.hidden = true; return; }
 
   const x = X(tt);
@@ -750,7 +755,7 @@ function previewProfile(){
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
   S.mode = b.dataset.mode;
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x===b));
-  $("paneCurve").hidden = S.mode !== "curve";
+  $("paneCurve").hidden = $("paneTools").hidden = S.mode !== "curve";
   $("paneStatic").hidden = S.mode !== "static";
   S.samples = []; S.state = S.state==="running" ? S.state : "idle";
   previewProfile(); renderControls();
@@ -792,22 +797,31 @@ $("delBtn").addEventListener("click", () => {
   S.samples = []; S.state = "idle"; previewProfile(); renderControls();
 });
 
-/* ---------- baixar modelo ---------- */
-const TPL_DEFAULT = "modelo-curva";
+/* ---------- janela de download: modelo de curva ou log do ciclo ---------- */
+const TPL_DEFAULT = "modelo-curva", LOG_DEFAULT = "reflow-log";
+const DLG = { mode:"tpl",     // cada modo lembra as próprias opções
+  tpl:{ name:TPL_DEFAULT, curve:false, date:false },
+  log:{ name:LOG_DEFAULT, curve:false, date:true } };
+const isLogDlg = () => DLG.mode === "log";
 const cleanFileName = s => String(s).replace(/[\\/:*?"<>|\x00-\x1f]/g, "").trim().replace(/\.csv$/i, "").replace(/[. ]+$/, "");
-const tplBaseName = () => cleanFileName($("tplName").value) || TPL_DEFAULT;
-const tplProfile = () => allProfiles().find(p => p.id === $("tplCurve").value) || PROFILES[0];
+const tplBaseName = () => cleanFileName($("tplName").value) || (isLogDlg() ? LOG_DEFAULT : TPL_DEFAULT);
+const tplProfile = () => isLogDlg() ? S.profile : allProfiles().find(p => p.id === $("tplCurve").value) || PROFILES[0];
+const two = n => String(n).padStart(2, "0");
 function localDate(){   // data do PC (toISOString usaria UTC e viraria o dia à noite no Brasil)
-  const d = new Date(), two = n => String(n).padStart(2, "0");
+  const d = new Date();
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
+function localDateTime(){
+  const d = new Date();
+  return `${localDate()}-${two(d.getHours())}-${two(d.getMinutes())}`;
+}
 function tplFileName(){
-  const parts = [tplBaseName()];
-  if ($("tplAddCurve").checked){
-    const curve = cleanFileName(tplProfile().name.replace(/\s*\(.*?\)/g, ""));   // "SAC305 (sem chumbo)" -> "SAC305"
+  const parts = [tplBaseName()], p = tplProfile();
+  if ($("tplAddCurve").checked && p){
+    const curve = cleanFileName(p.name.replace(/\s*\(.*?\)/g, ""));   // "SAC305 (sem chumbo)" -> "SAC305"
     if (curve && curve !== parts[0]) parts.push(curve);
   }
-  if ($("tplAddDate").checked) parts.push(localDate());
+  if ($("tplAddDate").checked) parts.push(isLogDlg() ? localDateTime() : localDate());
   return parts.join("-") + ".csv";
 }
 function tplCsv(){
@@ -820,23 +834,37 @@ function tplCsv(){
 }
 const renderTplPreview = () => { $("tplPreview").textContent = tplFileName(); };
 
-// savedName: nome da curva recém-criada (a janela vira a oferta de baixá-la)
-function openTplDlg(curveId, savedName){
-  $("tplTitle").textContent = savedName ? `Curva "${savedName}" salva. Quer baixar?` : "Baixar modelo";
-  $("tplCancel").textContent = savedName ? "Agora não" : "Cancelar";
-  if (savedName) $("tplName").value = cleanFileName(savedName) || TPL_DEFAULT;
-  $("tplCurve").innerHTML = profileOptions();
-  $("tplCurve").value = curveId;
+function showDlg(mode, title, cancelLabel, name){
+  DLG.mode = mode;
+  const o = DLG[mode], log = isLogDlg();
+  $("tplTitle").textContent = title;
+  $("tplCancel").textContent = cancelLabel;
+  $("tplName").value = name || o.name;
+  $("tplName").placeholder = log ? LOG_DEFAULT : TPL_DEFAULT;
+  $("tplAddCurve").checked = o.curve;
+  $("tplAddDate").checked = o.date;
+  $("tplCurveRow").hidden = log;      // o log é sempre da curva do ciclo
+  $("tplDateLbl").textContent = log ? "Adicionar a data e a hora ao nome" : "Adicionar a data ao nome";
   renderTplPreview();
   $("tplDlg").showModal();
   $("tplName").select();
 }
+// savedName: nome da curva recém-criada (a janela vira a oferta de baixá-la)
+function openTplDlg(curveId, savedName){
+  $("tplCurve").innerHTML = profileOptions();
+  $("tplCurve").value = curveId;
+  showDlg("tpl", savedName ? `Curva "${savedName}" salva. Quer baixar?` : "Baixar modelo",
+          savedName ? "Agora não" : "Cancelar", savedName && (cleanFileName(savedName) || TPL_DEFAULT));
+}
 $("tplBtn").addEventListener("click", () => openTplDlg($("profileSel").value));   // começa na curva do painel
+$("tplDlg").addEventListener("close", () => {
+  DLG[DLG.mode] = { name:$("tplName").value, curve:$("tplAddCurve").checked, date:$("tplAddDate").checked };
+});
 $("tplForm").addEventListener("input", renderTplPreview);
 $("tplCancel").addEventListener("click", () => $("tplDlg").close());
 $("tplForm").addEventListener("submit", e => {
   e.preventDefault();
-  const blob = new Blob(["﻿" + tplCsv().join("\r\n")], { type:"text/csv;charset=utf-8" });
+  const blob = new Blob(["﻿" + (isLogDlg() ? logCsv() : tplCsv()).join("\r\n")], { type:"text/csv;charset=utf-8" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = tplFileName();
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   $("tplDlg").close();
@@ -891,7 +919,7 @@ const edRefresh = () => { edErr(""); edRescale(); edRender(); redraw(); };
 function edShow(open){
   ED.open = open;
   document.querySelector(".tabs").hidden = open;
-  $("paneCurve").hidden = open || S.mode !== "curve";
+  $("paneCurve").hidden = $("paneTools").hidden = open || S.mode !== "curve";
   $("paneStatic").hidden = open || S.mode !== "static";
   $("profInfo").hidden = $("startBtn").hidden = $("cardFoot").hidden = open;
   $("paneEditor").hidden = $("edBar").hidden = !open;
@@ -1017,21 +1045,16 @@ $("startBtn").addEventListener("click", () => {
 });
 
 /* ---------- CSV ---------- */
-$("csvBtn").addEventListener("click", () => {
+function logCsv(){
   const n = v => v==null ? "" : String(+v.toFixed(2)).replace(".", ",");
-  const lines = [
+  return [
     `# Perfil;${S.profile ? S.profile.name : ""}`,
     `# Data;${new Date().toLocaleString("pt-BR")}`,
     "tempo_s;temperatura_C;planejada_C;alvo_C;duty_pct",
-    ...S.samples.map(s => [n(s[0]), n(s[1]), n(S.profile ? interp(S.profile.pts, s[0]) : null), n(s[2]), n(s[3])].join(";"))
+    ...S.samples.map(s => [n(s[0]), n(s[1]), n(plannedAt(s[0])), n(s[2]), n(s[3])].join(";"))
   ];
-  const blob = new Blob(["﻿" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,"-");
-  a.href = URL.createObjectURL(blob); a.download = `reflow-${stamp}.csv`;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-});
+}
+$("csvBtn").addEventListener("click", () => showDlg("log", "Baixar log", "Cancelar"));
 
 /* ---------- som / aviso ---------- */
 let actx = null;
@@ -1071,6 +1094,8 @@ $("toastOk").addEventListener("click", () => { $("toast").hidden = true; documen
 function setState(st, msg){
   if (!st || st === S.state) return;
   const prev = S.state; S.state = st;
+  S.after = prev === "running" && st !== "running" && S.samples.length
+    ? { t0:S.samples[S.samples.length-1][0], at:performance.now() } : null;
   if (st === "running"){ S.pending = false; clearTimeout(pendingTimer); if (prev !== "running" && S.samples.length && S.t === 0) S.samples = []; }
   if (st === "running" && ED.open){   // o ciclo precisa aparecer na tela; o rascunho continua guardado
     edShow(false);
@@ -1100,6 +1125,18 @@ function computeRate(){
   return dt > 0 ? (last[1] - sm[i][1]) / dt : null;
 }
 
+// Depois do ciclo o firmware manda t:null, então o tempo vem do relógio do navegador.
+function logAfterCycle(m){
+  const a = S.after;
+  if (!a) return;
+  if (!S.samples.length || S.pending){ S.after = null; return; }   // novo ciclo ou troca de curva
+  const t = a.t0 + (performance.now() - a.at)/1000 * (S.conn === "demo" ? SIM_SPEED : 1);
+  if (t - a.t0 > AFTER_MAX_S){ S.after = null; return; }
+  if (typeof m.temp !== "number" || t - S.samples[S.samples.length-1][0] < 1) return;
+  S.t = +t.toFixed(1);
+  S.samples.push([S.t, m.temp, null, S.duty]);
+}
+
 function handle(m){
   if (!m || typeof m !== "object") return;
   S.lastMsg = performance.now();
@@ -1116,7 +1153,8 @@ function handle(m){
         if (!last || m.t > last[0]) S.samples.push([m.t, m.temp, S.target, S.duty]);
         S.t = m.t;
       }
-      S.rate = typeof m.rate === "number" ? m.rate : (running() ? computeRate() : null);
+      logAfterCycle(m);
+      S.rate = typeof m.rate === "number" ? m.rate : (running() || S.after ? computeRate() : null);
       S.phase = m.phase || (S.profile && S.t!=null ? phaseAt(S.profile.pts, S.t) : null);
       renderReadout(); redraw();
       break;
