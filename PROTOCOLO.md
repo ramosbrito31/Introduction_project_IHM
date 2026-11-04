@@ -7,7 +7,7 @@ Todas as mensagens são **JSON em texto**, uma por frame. A página reconecta so
 
 | Comando | Exemplo | O que o ESP32 deve fazer |
 |---|---|---|
-| `hello` | `{"cmd":"hello"}` | Enviado ao conectar. Responder com `state`, e, se houver ciclo em andamento, `profile` + `history`. |
+| `hello` | `{"cmd":"hello"}` | Enviado ao conectar. Responder com `state` e `wifi`, e, se houver ciclo em andamento, `profile` + `history`. |
 | `start` | ver abaixo | Iniciar o ciclo com a curva recebida. Responder com `profile` (eco) e `state: "running"`. |
 | `stop` | `{"cmd":"stop"}` | Desligar a resistência imediatamente. Responder `state: "stopped"`. |
 
@@ -66,6 +66,36 @@ Prevalece sobre a curva local: garante que a linha "planejada" do gráfico é ex
 {"type":"history","samples":[[0,25.1,25,0],[0.5,25.3,25.4,80]]}
 ```
 Cada amostra: `[t, temp, alvo, duty]` (alvo e duty opcionais).
+
+## Rede Wi-Fi (modo híbrido com fallback)
+
+Comportamento do ESP32:
+1. Ao ligar, tenta a **rede salva** (modo Station) por 15 s.
+2. Sem rede salva ou sem sucesso → cria a **rede própria** `Reflow-Setup` (Access Point, `192.168.4.1`).
+3. Se a rede de casa cair por mais de 30 s → liga a rede própria e continua tentando a de casa.
+4. Em qualquer rede, também responde em `http://reflow.local` (mDNS; pode falhar no Android).
+5. O ciclo de aquecimento **não depende do Wi-Fi**. Trocar de rede é recusado durante um ciclo.
+
+Página → ESP32:
+| Comando | Exemplo | Resposta |
+|---|---|---|
+| `wifiStatus` | `{"cmd":"wifiStatus"}` | `wifi` |
+| `wifiScan` | `{"cmd":"wifiScan"}` | `wifiScan` (em 2–5 s) |
+| `wifiSet` | `{"cmd":"wifiSet","ssid":"Casa","pass":"senha123"}` | `wifi` com `event: connecting`, depois `connected` ou `failed`. Se conectar, grava na flash e reinicia em ~10 s. |
+| `wifiForget` | `{"cmd":"wifiForget"}` | `wifi` com `event: forgotten`; apaga a rede salva e reinicia na rede própria. |
+
+ESP32 → página:
+```json
+{"type":"wifi","event":"connected","host":"reflow.local","saved":"Casa",
+ "ap":{"ssid":"Reflow-Setup","ip":"192.168.4.1"},
+ "sta":{"ssid":"Casa","ip":"192.168.0.57","rssi":-52}}
+```
+- `ap` só aparece se a rede própria estiver ligada; `sta` só se estiver conectado na rede de casa.
+- `event` (opcional): `connecting` · `connected` · `failed` · `busy` · `forgotten`. `msg` traz o texto do erro.
+
+```json
+{"type":"wifiScan","nets":[{"ssid":"Casa","rssi":-52,"secure":true}]}
+```
 
 ## Regras do lado da página
 - Superfície quente: badge pulsante quando `temp ≥ 50 °C` (constante `HOT_C`).

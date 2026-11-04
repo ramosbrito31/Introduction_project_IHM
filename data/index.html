@@ -109,6 +109,26 @@ select:disabled,input:disabled{opacity:.55}
 .toast.ok{border-color:rgba(63,212,154,.5)} .toast.bad{border-color:rgba(255,77,94,.55)}
 .toast button{background:var(--line);border:0;border-radius:8px;padding:7px 12px;font-size:13px}
 
+/* ---------- janela Wi-Fi ---------- */
+.modal{position:fixed;inset:0;z-index:30;background:rgba(5,6,8,.66);display:flex;align-items:center;justify-content:center;padding:16px}
+.sheet{width:100%;max-width:420px;max-height:calc(100vh - 32px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.sheet-head{display:flex;align-items:center;justify-content:space-between}
+.sheet-head h3{margin:0;font-size:16px}
+.wstat{background:var(--panel2);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.7}
+.wstat b{font-family:var(--mono);font-weight:500}
+.wstat .k{color:var(--muted);display:inline-block;min-width:92px}
+.whelp{margin:0;font-size:12px;color:var(--muted);line-height:1.5}
+.inrow{display:flex;gap:8px}
+.inrow input{flex:1;min-width:0}
+.wlist{display:flex;flex-direction:column;gap:4px;max-height:200px;overflow:auto;background:var(--panel2);border-radius:10px;padding:4px}
+.wlist button{display:flex;align-items:center;justify-content:space-between;gap:10px;background:transparent;border:0;border-radius:7px;padding:8px 10px;font-size:13px;text-align:left}
+.wlist button:hover{background:var(--line)}
+.wlist .sig{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.wmsg{font-size:13px;border-radius:10px;padding:10px 12px;line-height:1.55;background:var(--panel2)}
+.wmsg.ok{background:rgba(63,212,154,.1);color:#bff3dd}
+.wmsg.bad{background:rgba(255,77,94,.1);color:#f6c3c9}
+.wmsg a{color:var(--ideal)}
+
 /* ---------- janela "baixar modelo" ---------- */
 .dlg{width:min(420px,calc(100vw - 32px));padding:0;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 12px 40px rgba(0,0,0,.5)}
 .dlg::backdrop{background:rgba(0,0,0,.6)}
@@ -145,6 +165,7 @@ select:disabled,input:disabled{opacity:.55}
   <div class="top-right">
     <span id="hotBadge" class="hot" hidden title="Superfície quente">⚠ <span>Superfície quente</span></span>
     <span id="conn" class="pill">Conectando…</span>
+    <button id="wifiBtn" class="icon" title="Rede Wi-Fi" aria-label="Rede Wi-Fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/></svg></button>
     <button id="muteBtn" class="icon" title="Som do aviso de término" aria-label="Som"></button>
   </div>
 </header>
@@ -218,6 +239,25 @@ select:disabled,input:disabled{opacity:.55}
     </section>
   </aside>
 </main>
+
+<div id="wifiModal" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="wTitle">
+    <div class="sheet-head">
+      <h3 id="wTitle">Rede Wi-Fi</h3>
+      <button id="wClose" class="icon" aria-label="Fechar">✕</button>
+    </div>
+    <div id="wStatus" class="wstat">Consultando a placa…</div>
+    <p class="whelp">Conecte a placa na rede da sua casa para acessá-la sem trocar de rede. Se essa rede não estiver disponível, a placa volta a criar a própria rede (<b id="wApName">Reflow-Setup</b>) sozinha. <b>Só funciona em redes 2,4 GHz</b>: redes 5 GHz não aparecem.</p>
+    <label>Rede
+      <div class="inrow"><input id="wSsid" placeholder="Nome da rede" autocomplete="off" autocapitalize="off"><button id="wScan" class="ghost" type="button">Procurar</button></div>
+    </label>
+    <div id="wList" class="wlist" hidden></div>
+    <label>Senha<input id="wPass" type="password" autocomplete="off"></label>
+    <button id="wConnect" class="primary">Conectar a esta rede</button>
+    <div id="wMsg" class="wmsg" hidden></div>
+    <button id="wForget" class="link" type="button" hidden>Esquecer a rede salva e usar só a rede própria</button>
+  </div>
+</div>
 
 <div id="toast" class="toast" hidden><span id="toastMsg"></span><button id="toastOk">OK</button></div>
 
@@ -871,8 +911,92 @@ function handle(m){
     case "state":
       setState(m.state, m.msg);
       break;
+    case "wifi":
+      onWifi(m);
+      break;
+    case "wifiScan":
+      onWifiScan(m.nets || []);
+      break;
   }
 }
+
+/* =====================================================================
+   CONFIGURAÇÃO DE REDE (Wi-Fi híbrido)
+   ===================================================================== */
+const W = { info:null, waiting:false };
+const wMsg = (html, kind) => { const el = $("wMsg"); el.innerHTML = html; el.className = "wmsg " + (kind||""); el.hidden = !html; };
+const bars = r => r >= -55 ? "▂▄▆█" : r >= -67 ? "▂▄▆ " : r >= -78 ? "▂▄  " : "▂   ";
+
+function renderWifi(){
+  const i = W.info;
+  if (!i){ $("wStatus").textContent = S.link ? "Consultando a placa…" : "Placa desconectada."; return; }
+  let h = "";
+  if (i.sta) h += `<div><span class="k">Rede de casa</span><b>${esc(i.sta.ssid)}</b> · ${esc(i.sta.ip)}</div>`;
+  if (i.ap)  h += `<div><span class="k">Rede própria</span><b>${esc(i.ap.ssid)}</b> · ${esc(i.ap.ip)}</div>`;
+  if (!i.sta && i.saved) h += `<div><span class="k">Rede salva</span><b>${esc(i.saved)}</b> (fora de alcance)</div>`;
+  if (!i.saved) h += `<div><span class="k">Rede salva</span>nenhuma</div>`;
+  if (i.host) h += `<div><span class="k">Endereço</span><b>http://${esc(i.host)}</b></div>`;
+  $("wStatus").innerHTML = h;
+  if (i.ap) $("wApName").textContent = i.ap.ssid;
+  $("wForget").hidden = !i.saved;
+  if (i.saved && !$("wSsid").value) $("wSsid").value = i.saved;
+}
+function onWifi(m){
+  W.info = m; renderWifi();
+  const busy = v => { W.waiting = v; $("wConnect").disabled = v; $("wScan").disabled = v; };
+  switch (m.event){
+    case "connecting": busy(true); wMsg("Conectando… isso leva até 15 s.", ""); break;
+    case "connected": {
+      busy(false);
+      const ip = m.sta ? m.sta.ip : "", host = m.host || "reflow.local";
+      wMsg(`<b>Conectado à rede ${esc(m.sta ? m.sta.ssid : "")}.</b><br>A placa vai reiniciar em alguns segundos e sair da rede própria.<br>
+            Conecte este aparelho na rede <b>${esc(m.sta ? m.sta.ssid : "")}</b> e acesse
+            <a href="http://${esc(ip)}">http://${esc(ip)}</a> ou <a href="http://${esc(host)}">http://${esc(host)}</a>.<br>
+            <small>Anote o IP: no Android o endereço “.local” pode não funcionar.</small>`, "ok");
+      break;
+    }
+    case "failed": busy(false); wMsg(esc(m.msg || "Não foi possível conectar."), "bad"); break;
+    case "busy": busy(false); wMsg(esc(m.msg || "Ocupado."), "bad"); break;
+    case "forgotten": wMsg("Rede esquecida. A placa vai reiniciar e criar a rede própria.", "ok"); break;
+  }
+}
+function onWifiScan(nets){
+  $("wScan").disabled = false; $("wScan").textContent = "Procurar";
+  const seen = new Set(), list = nets.filter(n => n.ssid && !seen.has(n.ssid) && seen.add(n.ssid))
+                                     .sort((a, b) => b.rssi - a.rssi);
+  const el = $("wList");
+  el.innerHTML = list.length ? list.map(n =>
+    `<button type="button" data-ssid="${esc(n.ssid)}"><span>${n.secure ? "🔒 " : ""}${esc(n.ssid)}</span><span class="sig">${bars(n.rssi)} ${n.rssi} dBm</span></button>`
+  ).join("") : `<div class="whelp" style="padding:8px">Nenhuma rede encontrada.</div>`;
+  el.hidden = false;
+}
+$("wList").addEventListener("click", e => {
+  const b = e.target.closest("button[data-ssid]"); if (!b) return;
+  $("wSsid").value = b.dataset.ssid; $("wPass").value = ""; $("wPass").focus();
+});
+$("wifiBtn").addEventListener("click", () => {
+  $("wifiModal").hidden = false; wMsg(""); renderWifi();
+  if (S.link) S.link.send({ cmd:"wifiStatus" });
+});
+$("wClose").addEventListener("click", () => { $("wifiModal").hidden = true; });
+$("wifiModal").addEventListener("click", e => { if (e.target.id === "wifiModal") $("wifiModal").hidden = true; });
+$("wScan").addEventListener("click", () => {
+  if (!S.link) return wMsg("Placa desconectada.", "bad");
+  $("wScan").disabled = true; $("wScan").textContent = "Procurando…";
+  S.link.send({ cmd:"wifiScan" });
+  setTimeout(() => { if ($("wScan").disabled && !W.waiting){ $("wScan").disabled = false; $("wScan").textContent = "Procurar"; } }, 12000);
+});
+$("wConnect").addEventListener("click", () => {
+  const ssid = $("wSsid").value.trim(), pass = $("wPass").value;
+  if (!S.link) return wMsg("Placa desconectada.", "bad");
+  if (running()) return wMsg("Espere o ciclo terminar para trocar de rede.", "bad");
+  if (!ssid) return wMsg("Escolha ou digite o nome da rede.", "bad");
+  if (pass && pass.length < 8) return wMsg("Senhas de Wi-Fi têm pelo menos 8 caracteres.", "bad");
+  S.link.send({ cmd:"wifiSet", ssid, pass });
+});
+$("wForget").addEventListener("click", () => {
+  if (S.link) S.link.send({ cmd:"wifiForget" });
+});
 
 /* =====================================================================
    CONEXÃO WI-FI (WebSocket em ws://<ip-da-placa>/ws)
@@ -929,8 +1053,26 @@ function startSim(){
       emit({ type:"state", state:"running" });
     } else if (o.cmd === "stop" && state === "running"){
       state = "stopped"; emit({ type:"state", state:"stopped" });
+    } else if (o.cmd === "wifiStatus"){
+      emit(wifi());
+    } else if (o.cmd === "wifiScan"){
+      setTimeout(() => handle({ type:"wifiScan", nets:[
+        { ssid:"Casa", rssi:-48, secure:true }, { ssid:"Casa_Visitas", rssi:-52, secure:true },
+        { ssid:"Vizinho", rssi:-81, secure:true }, { ssid:"Café Wi-Fi", rssi:-74, secure:false } ] }), 1500);
+    } else if (o.cmd === "wifiSet"){
+      if (state === "running") return emit(wifi("busy", "Espere o ciclo terminar para trocar de rede."));
+      emit(wifi("connecting"));
+      setTimeout(() => {
+        if (o.ssid === "Vizinho" || (o.pass||"").length < 8) emit(wifi("failed", "Não conectou. Confira a senha e o sinal."));
+        else { simWifi.saved = o.ssid; simWifi.sta = { ssid:o.ssid, ip:"192.168.0.57", rssi:-50 }; emit(wifi("connected")); }
+      }, 2500);
+    } else if (o.cmd === "wifiForget"){
+      simWifi.saved = ""; simWifi.sta = null; emit(wifi("forgotten"));
     }
   }};
+  const simWifi = { saved:"", sta:null };
+  const wifi = (event, msg) => ({ type:"wifi", event, msg, host:"reflow.local", saved:simWifi.saved,
+                                  ap:{ ssid:"Reflow-Setup", ip:"192.168.4.1" }, sta:simWifi.sta });
 
   const DT = 0.1;
   setInterval(() => {
