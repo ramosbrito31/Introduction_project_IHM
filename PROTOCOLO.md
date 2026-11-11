@@ -36,13 +36,15 @@ Todas as mensagens são **JSON em texto**, uma por frame. A página reconecta so
 ```
 | Campo | Obrig. | Descrição |
 |---|---|---|
-| `temp` | sim | Temperatura medida (°C). |
+| `temp` | sim | Temperatura medida (°C). `null` se o sensor estiver com defeito. |
 | `state` | sim | `idle` · `running` · `done` · `stopped` · `error` |
-| `t` | durante ciclo | Segundos desde o início do ciclo. Enviar `null` fora do ciclo. |
+| `t` | durante ciclo | Posição na curva, em segundos. Enviar `null` fora do ciclo. Normalmente é o tempo desde o início, mas anda mais devagar quando a placa não acompanha uma subida, então o ciclo pode durar mais que a curva. |
 | `duty` | sim | Esforço da resistência, 0–100 (%). |
 | `target` | opcional | Setpoint atual. Se ausente, a página calcula pela curva. |
 | `phase` | opcional | Nome da fase. Se ausente, a página deduz pela curva. |
 | `rate` | opcional | °C/s. Se ausente, a página calcula (janela de ~3 s). |
+| `msg` | em `error` | Motivo do erro, para quem abriu a página depois da falha. |
+| `vpp` | opcional | Amplitude bruta do sensor de tensão (contagens do ADC), para ajustar o ZMPT101B. A página ignora. |
 
 A página só plota pontos quando `state == "running"` e `t` cresce. Se `t` voltar para trás, entende como novo ciclo.
 Sem telemetria por 4 s → indicador "Sem dados".
@@ -53,7 +55,15 @@ Sem telemetria por 4 s → indicador "Sem dados".
 {"type":"state","state":"error","msg":"Termopar desconectado"}
 ```
 - `done` → aviso visual + sonoro de término (com opção de mudo).
-- `error` → aviso vermelho fixo com `msg`.
+- `error` → aviso vermelho fixo com `msg`. A placa fica em `error`, com a resistência desligada, até um novo `start` ser aceito.
+
+`done` e `stopped` continuam sendo informados na telemetria até o próximo ciclo; a página só avisa na transição a partir de `running`.
+
+### `reject` (comando recusado)
+```json
+{"type":"reject","msg":"Termopar desconectado ou com defeito."}
+```
+Resposta a um `start` recusado (curva inválida, ciclo em andamento, sensor com defeito). O estado da placa não muda. Regras da curva: 2 a 20 pontos, tempo sempre crescente até 7200 s, temperatura de 0 a 300 °C.
 
 ### `profile` (curva que a placa está executando)
 ```json

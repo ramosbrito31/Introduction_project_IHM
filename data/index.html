@@ -703,7 +703,8 @@ function renderReadout(){
   const duty = clamp(S.duty||0, 0, 100);
   $("dutyVal").textContent = Math.round(duty) + "%";
   $("dutyBar").style.width = duty + "%";
-  $("hotBadge").hidden = !(S.temp!=null && S.temp >= HOT_C);
+  // sem leitura não dá para garantir que esfriou: na dúvida, mantém o aviso
+  $("hotBadge").hidden = !(S.temp!=null ? S.temp >= HOT_C : S.state === "error");
   $("csvBtn").disabled = !S.samples.length;
   $("footInfo").textContent = S.samples.length
     ? `${S.samples.length} amostras · ${S.profile ? S.profile.name : ""}`
@@ -1101,14 +1102,16 @@ function setState(st, msg){
     edShow(false);
     toast('Um ciclo começou. Sua curva não foi perdida: clique em "Criar curva nova" depois para continuar.', "bad", true);
   }
-  if (st === "done"){
-    S.pending = false;
+  // A placa continua informando "done"/"stopped" depois do fim: só avisa quando o
+  // ciclo acabou de terminar, e não ao recarregar a página ou trocar de perfil.
+  if (st === "done" || st === "stopped") S.pending = false;
+  if (st === "done" && prev === "running"){
     toast("Ciclo concluído. Cuidado: a placa ainda está quente.", "ok", true);
     beep([[880,.18,.08],[1175,.18,.08],[1568,.35,0]]);
     try { navigator.vibrate && navigator.vibrate([200,100,200]); } catch(e){}
     document.title = "✔ Concluído · Reflow";
   }
-  if (st === "stopped"){ S.pending = false; toast("Ciclo interrompido.", "bad"); beep([[440,.2,0]]); }
+  if (st === "stopped" && prev === "running"){ toast("Ciclo interrompido.", "bad"); beep([[440,.2,0]]); }
   if (st === "error"){ S.pending = false; toast("Erro na placa" + (msg ? ": " + msg : "."), "bad", true); beep([[330,.25,.1],[330,.25,0]]); }
   renderControls(); renderReadout();
 }
@@ -1144,7 +1147,7 @@ function handle(m){
   switch (m.type){
     case "telemetry": {
       if (m.state) setState(m.state, m.msg);
-      if (typeof m.temp === "number") S.temp = m.temp;
+      if (typeof m.temp === "number" || m.temp === null) S.temp = m.temp;   // null: sensor com defeito
       S.target = typeof m.target === "number" ? m.target : (running() && S.profile && m.t!=null ? interp(S.profile.pts, m.t) : null);
       if (typeof m.duty === "number") S.duty = m.duty;
       if (typeof m.t === "number" && running()){
@@ -1174,6 +1177,12 @@ function handle(m){
       break;
     case "state":
       setState(m.state, m.msg);
+      break;
+    case "reject":       // a placa recusou o comando; o estado não mudou
+      S.pending = false; clearTimeout(pendingTimer);
+      toast(m.msg || "A placa recusou o comando.", "bad", true);
+      beep([[330,.25,0]]);
+      renderControls();
       break;
     case "wifi":
       onWifi(m);
