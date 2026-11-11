@@ -1,8 +1,10 @@
 #include <Arduino.h>
 
 /*
-  Placa de Reflow: esqueleto da COMUNICAÇÃO do ESP32 com o site
+  Placa de Reflow: firmware do ESP32
   ---------------------------------------------------------------
+  - Controle: termopar (MAX6675) -> PI + feed-forward -> SSR por janela de tempo.
+    A lógica fica em lib/Controle (testada no PC); aqui só o que toca o hardware.
   - Wi-Fi: servidor web serve o index.html (LittleFS) + WebSocket em /ws
   - USB:   as MESMAS mensagens JSON pela Serial, uma por linha
   - Wi-Fi HÍBRIDO com fallback:
@@ -13,9 +15,8 @@
          sozinha (e continua tentando reconectar na de casa).
       A rede de casa é configurada pelo próprio site (botão de Wi-Fi no topo).
       Em qualquer rede, também dá para acessar por http://reflow.local
-  O controle térmico (leitura do sensor, PID, SSR) está marcado como
-  "SUA LÓGICA AQUI": só a parte de comunicação está completa.
   O ciclo de aquecimento NÃO depende do Wi-Fi: se a conexão cair, ele continua.
+  Ligações e calibração: ver README.md
 
   Bibliotecas: ESPAsyncWebServer + AsyncTCP, ArduinoJson (v7), LittleFS
   (Preferences e ESPmDNS já vêm com o pacote do ESP32)
@@ -27,6 +28,29 @@
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <esp_task_wdt.h>
+#include "Controle.h"
+
+// ---- ligações ----
+const int PINO_SSR = 26;   // entrada + do SSR (nível alto liga)
+const int PINO_SCK = 18;   // MAX6675 SCK
+const int PINO_SO  = 19;   // MAX6675 SO
+const int PINO_CS  = 23;   // MAX6675 CS
+const int PINO_ZMPT = 34;  // ZMPT101B OUT (precisa ser ADC1: o ADC2 não funciona com Wi-Fi)
+const bool USAR_SENSOR_TENSAO = true;  // false enquanto o ZMPT101B não estiver ligado
+
+// ---- modelo da placa: CALIBRE com a sua placa (ver README.md) ----
+const ParamControle PARAM_CONTROLE = {
+  3.2f,    // pMax   °C/s com 100% de potência
+  0.008f,  // perda  1/s
+  25.0f,   // tAmb   °C
+  5.0f,    // atraso s
+  5.0f,    // kp     %/°C
+  0.4f,    // ki     %/(°C·s)
+  25.0f,   // iMax   %
+};
+const uint32_t PERIODO_CONTROLE_MS = 250;  // o MAX6675 leva até 220 ms por conversão
+const uint32_t WATCHDOG_S = 5;             // loop travado por esse tempo => reinicia (SSR desliga)
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -42,8 +66,7 @@ String redeSalva, senhaSalva;            // rede de casa (gravada na flash)
 // ------------------------------------------------------------------
 // Estado do sistema (é isto que vai para o site)
 // ------------------------------------------------------------------
-struct Ponto { float t; float T; char fase[20]; };
-Ponto    curva[20];
+Ponto    curva[MAX_PONTOS];
 int      nPontos = 0;
 char     nomePerfil[48] = "";
 float    liquidus = 0;
@@ -51,12 +74,20 @@ bool     modoEstatico = false;
 
 enum Estado { EST_IDLE, EST_RUNNING, EST_DONE, EST_STOPPED, EST_ERR };
 Estado   estado = EST_IDLE;
-char     msgErro[48] = "";
+char     msgErro[96] = "";
 
-uint32_t inicioMs = 0;
-float    tempAtual = 25.0;  // °C medida
+float    tCurva = 0;        // s: relógio da curva (pode andar devagar se a placa atrasar)
+float    tempAtual = 0;     // °C medida
 float    alvo = 0;          // setpoint atual
 float    duty = 0;          // 0..100 %
+
+Controlador      controlador(PARAM_CONTROLE);
+JanelaSSR        janelaSSR;
+LeituraSensor    sensor;
+MonitorSeguranca monitor;
+MonitorTensao    monitorTensao;
+Falha            falhaAtual = FALHA_NENHUMA;
+bool             ssrPreso = false;   // só sai reiniciando a placa
 
 const char* nomeEstado() {
   switch (estado) {
@@ -67,7 +98,6 @@ const char* nomeEstado() {
     default:      return "idle";
   }
 }
-float tempoCiclo() { return (millis() - inicioMs) / 1000.0f; }
 
 // ------------------------------------------------------------------
 // ENVIO: ESP32 -> site (Wi-Fi e USB ao mesmo tempo)
@@ -83,14 +113,17 @@ void enviarTelemetria() {
   JsonDocument doc;
   doc["type"]  = "telemetry";
   doc["state"] = nomeEstado();
-  doc["temp"]  = tempAtual;
-  doc["duty"]  = duty;
+  if (sensor.ok()) doc["temp"] = tempAtual;
+  else             doc["temp"] = nullptr;
+  doc["duty"]  = roundf(duty);
+  if (USAR_SENSOR_TENSAO) doc["vpp"] = monitorTensao.amplitude();   // para ajustar o ZMPT101B
   if (estado == EST_RUNNING) {
-    doc["t"]      = tempoCiclo();
+    doc["t"]      = tCurva;
     doc["target"] = alvo;
   } else {
     doc["t"] = nullptr;
   }
+  if (estado == EST_ERR) doc["msg"] = msgErro;
   enviar(doc);
 }
 
@@ -121,6 +154,27 @@ void enviarPerfil() {   // eco da curva que o controle está seguindo
 void mudarEstado(Estado novo) {
   estado = novo;
   enviarEstado();
+}
+
+void rejeitar(const char* msg) {   // comando recusado; o estado não muda
+  JsonDocument doc;
+  doc["type"] = "reject";
+  doc["msg"]  = msg;
+  enviar(doc);
+}
+
+void desligarSSR() {
+  duty = 0;
+  digitalWrite(PINO_SSR, LOW);
+}
+
+void entrarEmFalha(Falha f) {
+  desligarSSR();
+  if (f == FALHA_SSR_PRESO) ssrPreso = true;   // inclui o caso detectado pelo sensor de tensão
+  if (f == falhaAtual) return;     // o aviso já foi dado
+  falhaAtual = f;
+  strlcpy(msgErro, textoFalha(f), sizeof(msgErro));
+  mudarEstado(EST_ERR);
 }
 
 // ------------------------------------------------------------------
@@ -255,6 +309,46 @@ void tratarWiFi() {
 // ------------------------------------------------------------------
 // RECEBIMENTO: site -> ESP32 (mesma função para Wi-Fi e USB)
 // ------------------------------------------------------------------
+void iniciarCiclo(JsonDocument& doc) {
+  if (estado == EST_RUNNING) return rejeitar("Já existe um ciclo em andamento.");
+  if (ssrPreso)              return rejeitar(textoFalha(FALHA_SSR_PRESO));
+  if (!sensor.ok())          return rejeitar(textoFalha(FALHA_SENSOR));
+  if (tempAtual >= MonitorSeguranca::TEMP_CORTE) return rejeitar(textoFalha(FALHA_SOBRETEMP));
+
+  JsonObject prof = doc["profile"];
+  JsonArray  pts  = prof["pts"];
+  int n = pts.size();
+  if (n > MAX_PONTOS) n = MAX_PONTOS + 1;     // validarCurva recusa sem olhar os pontos
+
+  static Ponto nova[MAX_PONTOS];
+  if (n <= MAX_PONTOS) {
+    int i = 0;
+    for (JsonArray p : pts) {
+      nova[i].t = p[0] | NAN;
+      nova[i].T = p[1] | NAN;
+      strlcpy(nova[i].fase, p[2] | "", sizeof(nova[i].fase));
+      i++;
+    }
+  }
+  const char* problema = validarCurva(nova, n);
+  if (problema) return rejeitar(problema);
+
+  memcpy(curva, nova, sizeof(Ponto) * n);
+  nPontos = n;
+  strlcpy(nomePerfil, prof["name"] | "Perfil", sizeof(nomePerfil));
+  liquidus     = prof["liq"] | 0.0f;
+  modoEstatico = strcmp(doc["mode"] | "curve", "static") == 0;
+
+  tCurva = 0;
+  alvo = interpolar(curva, nPontos, 0);
+  controlador.reiniciar();
+  monitor.reiniciar();
+  monitorTensao.reiniciar();
+  falhaAtual = FALHA_NENHUMA;
+  enviarPerfil();
+  mudarEstado(EST_RUNNING);     // a página espera isto em até 4 s
+}
+
 void processarComando(JsonDocument& doc) {
   const char* cmd = doc["cmd"] | "";
 
@@ -280,40 +374,38 @@ void processarComando(JsonDocument& doc) {
     pedidoEsquecer = true;
   }
   else if (strcmp(cmd, "start") == 0) {
-    JsonObject prof = doc["profile"];
-    JsonArray  pts  = prof["pts"];
-    if (pts.isNull() || pts.size() < 2) return;
-
-    strlcpy(nomePerfil, prof["name"] | "Perfil", sizeof(nomePerfil));
-    liquidus     = prof["liq"] | 0.0f;
-    modoEstatico = strcmp(doc["mode"] | "curve", "static") == 0;
-    nPontos = 0;
-    for (JsonArray p : pts) {
-      if (nPontos >= 20) break;
-      curva[nPontos].t = p[0];
-      curva[nPontos].T = p[1];
-      strlcpy(curva[nPontos].fase, p[2] | "", sizeof(curva[nPontos].fase));
-      nPontos++;
-    }
-    inicioMs = millis();
-    enviarPerfil();
-    mudarEstado(EST_RUNNING);   // a página espera isto em até 4 s
+    iniciarCiclo(doc);
   }
   else if (strcmp(cmd, "stop") == 0) {
-    duty = 0;
-    // SUA LÓGICA AQUI: desligar a resistência IMEDIATAMENTE
-    mudarEstado(EST_STOPPED);
+    desligarSSR();
+    if (estado == EST_RUNNING) mudarEstado(EST_STOPPED);
+    else enviarEstado();        // não apaga um erro nem um "concluído"
   }
 }
 
-// Wi-Fi: chega uma mensagem pelo WebSocket
+// Wi-Fi: as mensagens chegam em outra tarefa (a do servidor). Só vão para a fila;
+// quem processa é o loop(), para o estado do controle ter um único dono.
+QueueHandle_t filaComandos;
+
 void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
                AwsEventType type, void* arg, uint8_t* data, size_t len) {
   if (type != WS_EVT_DATA) return;
   AwsFrameInfo* info = (AwsFrameInfo*)arg;
   if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    char* copia = (char*)malloc(len + 1);
+    if (!copia) return;
+    memcpy(copia, data, len);
+    copia[len] = 0;
+    if (xQueueSend(filaComandos, &copia, 0) != pdTRUE) free(copia);
+  }
+}
+
+void lerFilaWs() {
+  char* msg;
+  while (xQueueReceive(filaComandos, &msg, 0) == pdTRUE) {
     JsonDocument doc;
-    if (deserializeJson(doc, data, len) == DeserializationError::Ok) processarComando(doc);
+    if (deserializeJson(doc, (const char*)msg) == DeserializationError::Ok) processarComando(doc);
+    free(msg);
   }
 }
 
@@ -333,53 +425,103 @@ void lerSerial() {
 }
 
 // ------------------------------------------------------------------
-// CONTROLE (placeholder)
+// CONTROLE
 // ------------------------------------------------------------------
-float interpolar(float t) {
-  if (t <= curva[0].t) return curva[0].T;
-  for (int i = 1; i < nPontos; i++)
-    if (t <= curva[i].t)
-      return curva[i-1].T + (curva[i].T - curva[i-1].T) * (t - curva[i-1].t) / (curva[i].t - curva[i-1].t);
-  return curva[nPontos-1].T;
+uint16_t lerMax6675() {
+  uint16_t v = 0;
+  digitalWrite(PINO_CS, LOW);
+  delayMicroseconds(1);
+  for (int i = 0; i < 16; i++) {
+    digitalWrite(PINO_SCK, HIGH);
+    delayMicroseconds(1);
+    v = (v << 1) | digitalRead(PINO_SO);
+    digitalWrite(PINO_SCK, LOW);
+    delayMicroseconds(1);
+  }
+  digitalWrite(PINO_CS, HIGH);   // inicia a próxima conversão
+  return v;
 }
 
-void controlar() {
-  // SUA LÓGICA AQUI: tempAtual = lerTermopar();
-  if (estado == EST_RUNNING) {
-    float t = tempoCiclo();
-    alvo = interpolar(t);
-    // SUA LÓGICA AQUI: duty = pid(alvo, tempAtual); acionar SSR/MOSFET
-    if (t >= curva[nPontos-1].t) {
-      duty = 0;
-      mudarEstado(EST_DONE);
-    }
-  } else {
-    duty = 0;
+void controlar(float dt) {
+  float lido = 0;
+  bool valida = decodificarMax6675(lerMax6675(), lido);
+  sensor.atualizar(valida, lido);
+  tempAtual = sensor.temperatura();
+
+  duty = 0;
+  if (estado == EST_RUNNING && sensor.ok()) {
+    tCurva += dt * velocidadeCurva(curva, nPontos, tCurva, tempAtual);
+    alvo = interpolar(curva, nPontos, tCurva);
+    if (tCurva >= curva[nPontos-1].t) mudarEstado(EST_DONE);
+    else duty = controlador.calcular(curva, nPontos, tCurva, tempAtual, dt);
   }
+
+  // roda em qualquer estado: sensor solto ou SSR em curto também importam fora do ciclo
+  Falha f = monitor.verificar(millis(), sensor.ok(), tempAtual, duty, estado == EST_RUNNING ? alvo : 0);
+  if (f == FALHA_NENHUMA && USAR_SENSOR_TENSAO) f = monitorTensao.falha();
+  if (f != FALHA_NENHUMA) entrarEmFalha(f);
+}
+
+void iniciarWatchdog() {
+#if ESP_IDF_VERSION_MAJOR >= 5
+  esp_task_wdt_config_t cfg = {};
+  cfg.timeout_ms = WATCHDOG_S * 1000;
+  cfg.trigger_panic = true;
+  esp_task_wdt_reconfigure(&cfg);
+#else
+  esp_task_wdt_init(WATCHDOG_S, true);
+#endif
+  esp_task_wdt_add(NULL);   // vigia o loop()
 }
 
 // ------------------------------------------------------------------
 void setup() {
+  // antes de tudo: resistência desligada
+  digitalWrite(PINO_SSR, LOW);
+  pinMode(PINO_SSR, OUTPUT);
+  digitalWrite(PINO_CS, HIGH);
+  pinMode(PINO_CS, OUTPUT);
+  pinMode(PINO_SCK, OUTPUT);
+  pinMode(PINO_SO, INPUT);
+
   Serial.setRxBufferSize(2048);   // o comando "start" com a curva pode passar de 256 bytes
   Serial.begin(115200);
   LittleFS.begin(true);
 
   iniciarWiFi();   // rede de casa se configurada; senão rede própria "Reflow-Setup"
 
+  filaComandos = xQueueCreate(8, sizeof(char*));
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
   server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html"); // serve index.html.gz automaticamente
   server.begin();
+  iniciarWatchdog();
 }
 
 void loop() {
   static uint32_t ultimoControle = 0, ultimaTelemetria = 0;
+  esp_task_wdt_reset();
+
   lerSerial();
+  lerFilaWs();
   tratarWiFi();
 
-  if (millis() - ultimoControle >= 100) { ultimoControle = millis(); controlar(); }
+  uint32_t agora = millis();
+  if (agora - ultimoControle >= PERIODO_CONTROLE_MS) {
+    controlar((agora - ultimoControle) / 1000.0f);
+    ultimoControle = agora;
+  }
+  // chamado a toda volta: é o que forma a janela de tempo do SSR
+  bool ssrLigado = janelaSSR.atualizar(millis(), estado == EST_RUNNING ? duty : 0);
+  digitalWrite(PINO_SSR, ssrLigado ? HIGH : LOW);
+
+  static uint32_t ultimaAmostra = 0;
+  if (USAR_SENSOR_TENSAO && millis() != ultimaAmostra) {
+    ultimaAmostra = millis();
+    monitorTensao.amostra(ultimaAmostra, analogRead(PINO_ZMPT), ssrLigado);
+  }
+
   if (millis() - ultimaTelemetria >= 250) { ultimaTelemetria = millis(); enviarTelemetria(); }
 
   ws.cleanupClients();
 }
-
