@@ -13,7 +13,7 @@
 #include "Controle.h"
 
 // Mesmos valores padrão do src/main.cpp
-static const ParamControle PARAM = { 3.2f, 0.008f, 25.0f, 5.0f, 5.0f, 0.4f, 25.0f };
+static const ParamControle PARAM = { 3.2f, 0.008f, 25.0f, 5.0f, 5.0f, 0.4f, 25.0f, 1.0f, 15.0f, 4.0f };
 
 static const Ponto SAC305[] = {
   {0,25,""},{90,150,""},{180,180,""},{210,217,""},{240,245,""},{270,217,""},{360,50,""}};
@@ -40,8 +40,9 @@ static float sensorLe(float T) {
 }
 
 // Roda um ciclo inteiro em passos de 10 ms, com o código real do firmware.
-static Resultado ciclo(const Ponto* c, int n, Planta pl, bool ssrMorto = false, float liq = 0) {
-  Controlador ctl(PARAM);
+static Resultado ciclo(const Ponto* c, int n, Planta pl, bool ssrMorto = false, float liq = 0,
+                        const ParamControle& par = PARAM) {
+  Controlador ctl(par);
   JanelaSSR ssr;
   LeituraSensor sensor;
   MonitorSeguranca mon;
@@ -54,7 +55,7 @@ static Resultado ciclo(const Ponto* c, int n, Planta pl, bool ssrMorto = false, 
     uint32_t ms = (uint32_t)(k * 10);
     if (k % 25 == 0) {                             // a cada 250 ms, como no firmware
       sensor.atualizar(true, sensorLe(pl.T));
-      t += 0.25f * velocidadeCurva(c, n, t, sensor.temperatura());
+      t += 0.25f * ctl.velocidade(c, n, t, sensor.temperatura());
       r.duracao = k * dt;
       float alvo = interpolar(c, n, t);
       duty = ctl.calcular(c, n, t, sensor.temperatura(), 0.25f);
@@ -338,8 +339,70 @@ void test_placa_220v_em_127v_segue_curva_baixa() {
   TEST_ASSERT_LESS_THAN_FLOAT(3.0f, erroMax);   // patamar a 100 °C, dentro de 3 °C
 }
 
+// ---------- freio preditivo ----------
+// Placa com 3x mais atraso do que o modelo de fábrica supõe, mas com o atraso
+// informado ao controle: o freio precisa segurar o calor acumulado.
+void test_freio_reduz_overshoot_em_placa_lenta() {
+  Planta pl{3.2f, 0.008f, 15.0f};
+  ParamControle com = PARAM; com.atraso = 15.0f;
+  ParamControle sem = com;   sem.margem = -1.0f; sem.bandaI = 1000.0f;   // algoritmo antigo
+  Resultado rCom = ciclo(ESTATICO, N(ESTATICO), pl, false, 0, com);
+  Resultado rSem = ciclo(ESTATICO, N(ESTATICO), pl, false, 0, sem);
+  relata("lenta com freio", rCom);
+  relata("lenta sem freio", rSem);
+  TEST_ASSERT_EQUAL(FALHA_NENHUMA, rCom.falha);
+  TEST_ASSERT_LESS_THAN_FLOAT(rSem.pico - 2.0f, rCom.pico);   // pelo menos 2 °C a menos
+  TEST_ASSERT_LESS_THAN_FLOAT(153.0f, rCom.pico);
+}
+
+void test_freio_deixa_chegar_ao_pico() {
+  Planta pl{3.2f, 0.008f, 15.0f};
+  ParamControle com = PARAM; com.atraso = 15.0f;
+  Resultado r = ciclo(SAC305, N(SAC305), pl, false, 217, com);
+  relata("SAC305 lenta com freio", r);
+  TEST_ASSERT_EQUAL(FALHA_NENHUMA, r.falha);
+  TEST_ASSERT_FLOAT_WITHIN(5.0f, 245.0f, r.pico);
+}
+
+void test_curva_espera_mais_perto_do_pico() {
+  // 4,5 °C atrás: no meio da subida quase não espera; a 2 °C do pico, espera bastante
+  TEST_ASSERT_GREATER_THAN_FLOAT(0.8f, velocidadeCurva(SAC305, N(SAC305), 45, 83.0f));    // alvo 87,5
+  TEST_ASSERT_LESS_THAN_FLOAT(0.3f, velocidadeCurva(SAC305, N(SAC305), 238, 238.63f));    // alvo 243,13
+}
+
+// ---------- malha aberta e parâmetros ----------
+void test_malha_aberta_corta_e_nao_volta() {
+  Ponto p[] = {{0,100,""},{100,100,""}};
+  bool cortado = false;
+  TEST_ASSERT_EQUAL_FLOAT(100.0f, dutyMalhaAberta(p, 2, 10, 100, 150, cortado));
+  TEST_ASSERT_EQUAL_FLOAT(0.0f,   dutyMalhaAberta(p, 2, 20, 150, 150, cortado));
+  TEST_ASSERT_EQUAL_FLOAT(0.0f,   dutyMalhaAberta(p, 2, 30, 120, 150, cortado));   // esfriou: continua desligada
+  TEST_ASSERT_NULL(validarMalhaAberta(p, 2, 200));
+  TEST_ASSERT_NOT_NULL(validarMalhaAberta(p, 2, 300));      // acima de 280 °C
+  Ponto demais[] = {{0,100,""},{10,120,""}};
+  TEST_ASSERT_NOT_NULL(validarMalhaAberta(demais, 2, 200)); // mais de 100%
+}
+
+void test_parametros_por_nome() {
+  ParamControle p = PARAM;
+  for (int i = 0; i < N_PARAM; i++) TEST_ASSERT_NOT_NULL(campoParam(p, i));
+  TEST_ASSERT_NULL(campoParam(p, N_PARAM));
+  *campoParam(p, 4) = 7.0f;
+  TEST_ASSERT_EQUAL_FLOAT(7.0f, p.kp);
+  TEST_ASSERT_EQUAL_STRING("kp", NOMES_PARAM[4]);
+  TEST_ASSERT_NULL(validarParam(4, 3.0f));
+  TEST_ASSERT_NOT_NULL(validarParam(4, -1.0f));
+  TEST_ASSERT_NOT_NULL(validarParam(0, NAN));
+  for (int i = 0; i < N_PARAM; i++) TEST_ASSERT_NULL(validarParam(i, *campoParam(p, i)));   // o padrão é válido
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_freio_reduz_overshoot_em_placa_lenta);
+  RUN_TEST(test_freio_deixa_chegar_ao_pico);
+  RUN_TEST(test_curva_espera_mais_perto_do_pico);
+  RUN_TEST(test_malha_aberta_corta_e_nao_volta);
+  RUN_TEST(test_parametros_por_nome);
   RUN_TEST(test_tensao_da_rede_ajusta_a_potencia);
   RUN_TEST(test_placa_220v_em_127v_segue_curva_baixa);
   RUN_TEST(test_placa_conforme_o_modelo);

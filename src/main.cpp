@@ -48,7 +48,13 @@ const ParamControle PARAM_CONTROLE = {
   5.0f,    // kp     %/°C
   0.4f,    // ki     %/(°C·s)
   25.0f,   // iMax   %
+  1.0f,    // margem °C acima da curva que o freio preditivo tolera (negativo = sem freio)
+  15.0f,   // bandaI °C: a integral só acumula perto da curva
+  4.0f,    // folga  °C de atraso tolerado antes de a curva esperar a placa
 };
+// Os parâmetros em uso podem ser trocados pela bancada de testes (comando "params")
+// e gravados na flash; PARAM_CONTROLE é o padrão de fábrica.
+ParamControle paramControle = PARAM_CONTROLE;
 const uint32_t PERIODO_CONTROLE_MS = 250;  // o MAX6675 leva até 220 ms por conversão
 const uint32_t WATCHDOG_S = 5;             // loop travado por esse tempo => reinicia (SSR desliga)
 
@@ -75,6 +81,9 @@ int      nPontos = 0;
 char     nomePerfil[48] = "";
 float    liquidus = 0;
 bool     modoEstatico = false;
+bool     malhaAberta = false;   // teste de identificação: os pontos são potências (%)
+float    tMaxAberta = 0;        // °C: corta a potência ao atingir
+bool     cortadoAberta = false;
 
 enum Estado { EST_IDLE, EST_RUNNING, EST_DONE, EST_STOPPED, EST_ERR };
 Estado   estado = EST_IDLE;
@@ -123,12 +132,21 @@ void enviarTelemetria() {
   if (sensor.ok()) doc["temp"] = tempAtual;
   else             doc["temp"] = nullptr;
   doc["duty"]  = roundf(duty);
+  doc["u"]     = roundf(duty * 10) / 10;   // duty com uma casa (bancada de testes)
+  doc["ms"]    = millis();
   float vm = tensaoMedida();                 // tensão da rede pelo sensor (null se não houver)
   if (isnan(vm)) doc["vac"] = nullptr; else doc["vac"] = roundf(vm);
   doc["vuse"] = roundf(tensaoEmUso());      // tensão que o controle está considerando
   if (estado == EST_RUNNING) {
     doc["t"]      = tCurva;
-    doc["target"] = alvo;
+    if (malhaAberta) doc["target"] = nullptr;
+    else {
+      doc["target"] = alvo;
+      const DiagControle& d = controlador.diag();   // partes do controle, para a bancada
+      JsonArray c = doc["ctl"].to<JsonArray>();
+      c.add(roundf(d.ff * 10) / 10); c.add(roundf(d.p * 10) / 10); c.add(roundf(d.i * 10) / 10);
+      c.add(roundf(d.teto * 10) / 10); c.add(roundf(d.uf * 1000) / 1000);
+    }
   } else {
     doc["t"] = nullptr;
   }
@@ -148,7 +166,7 @@ void enviarPerfil() {   // eco da curva que o controle está seguindo
   JsonDocument doc;
   doc["type"] = "profile";
   doc["name"] = nomePerfil;
-  doc["mode"] = modoEstatico ? "static" : "curve";
+  doc["mode"] = malhaAberta ? "open" : (modoEstatico ? "static" : "curve");
   if (liquidus > 0) doc["liq"] = liquidus;
   JsonArray pts = doc["pts"].to<JsonArray>();
   for (int i = 0; i < nPontos; i++) {
@@ -330,7 +348,63 @@ float tensaoEmUso()  { return usandoSensor() ? tensaoMedida() : (float)tensaoMan
 
 // O controle acompanha a tensão em uso (chamado a cada segundo, inclusive no ciclo)
 void aplicarTensao() {
-  controlador.definirParametros(paramParaTensao(PARAM_CONTROLE, tensaoEmUso()));
+  controlador.definirParametros(paramParaTensao(paramControle, tensaoEmUso()));
+}
+
+// ------------------------------------------------------------------
+// PARÂMETROS DO CONTROLE (bancada de testes)
+// ------------------------------------------------------------------
+// {"cmd":"params"}                          -> responde com os parâmetros em uso
+// {"cmd":"params","set":{"kp":4,...}}       -> troca (só fora do ciclo); "save":true grava na flash
+// {"cmd":"params","reset":true}             -> volta ao padrão de fábrica e apaga o que estava gravado
+void carregarParametros() {
+  paramControle = PARAM_CONTROLE;
+  prefs.begin("controle", true);
+  for (int i = 0; i < N_PARAM; i++) {
+    float v = prefs.getFloat(NOMES_PARAM[i], NAN);
+    if (!isnan(v) && !validarParam(i, v)) *campoParam(paramControle, i) = v;
+  }
+  prefs.end();
+}
+
+void enviarParametros(const char* evento = nullptr, const char* msg = nullptr) {
+  JsonDocument doc;
+  doc["type"] = "params";
+  if (evento) doc["event"] = evento;
+  if (msg)    doc["msg"]   = msg;
+  JsonObject p = doc["p"].to<JsonObject>();
+  for (int i = 0; i < N_PARAM; i++) p[NOMES_PARAM[i]] = *campoParam(paramControle, i);
+  enviar(doc);
+}
+
+void comandoParametros(JsonDocument& doc) {
+  bool muda = !doc["set"].isNull() || (doc["reset"] | false) || (doc["save"] | false);
+  if (!muda) return enviarParametros();
+  if (estado == EST_RUNNING) return enviarParametros("busy", "Espere o ciclo terminar para trocar os parâmetros.");
+
+  if (doc["reset"] | false) {
+    paramControle = PARAM_CONTROLE;
+    prefs.begin("controle", false); prefs.clear(); prefs.end();
+  }
+  ParamControle novo = paramControle;
+  JsonObject set = doc["set"];
+  for (JsonPair kv : set) {
+    int i = 0;
+    while (i < N_PARAM && strcmp(NOMES_PARAM[i], kv.key().c_str()) != 0) i++;
+    if (i == N_PARAM) return enviarParametros("failed", "Parâmetro desconhecido.");
+    float v = kv.value() | NAN;
+    const char* e = validarParam(i, v);
+    if (e) return enviarParametros("failed", e);
+    *campoParam(novo, i) = v;
+  }
+  paramControle = novo;
+  if (doc["save"] | false) {
+    prefs.begin("controle", false);
+    for (int i = 0; i < N_PARAM; i++) prefs.putFloat(NOMES_PARAM[i], *campoParam(paramControle, i));
+    prefs.end();
+  }
+  aplicarTensao();
+  enviarParametros((doc["save"] | false) ? "saved" : "applied");
 }
 
 void carregarConfig() {
@@ -341,6 +415,7 @@ void carregarConfig() {
   prefs.end();
   tensaoManual = tensaoValida(v) ? v : TENSAO_PADRAO;
   if (!(fatorCal > 0 && fatorCal < 10)) fatorCal = 0;
+  carregarParametros();
   aplicarTensao();
   Serial.printf("# Tensao manual: %d V  automatico: %s  sensor calibrado: %s\n",
                 tensaoManual, tensaoAuto ? "sim" : "nao", fatorCal > 0 ? "sim" : "nao");
@@ -417,7 +492,9 @@ void iniciarCiclo(JsonDocument& doc) {
       i++;
     }
   }
-  const char* problema = validarCurva(nova, n);
+  bool aberta = strcmp(doc["mode"] | "curve", "open") == 0;
+  float tmax  = doc["tmax"] | 0.0f;
+  const char* problema = aberta ? validarMalhaAberta(nova, n, tmax) : validarCurva(nova, n);
   if (problema) return rejeitar(problema);
 
   memcpy(curva, nova, sizeof(Ponto) * n);
@@ -425,9 +502,12 @@ void iniciarCiclo(JsonDocument& doc) {
   strlcpy(nomePerfil, prof["name"] | "Perfil", sizeof(nomePerfil));
   liquidus     = prof["liq"] | 0.0f;
   modoEstatico = strcmp(doc["mode"] | "curve", "static") == 0;
+  malhaAberta  = aberta;
+  tMaxAberta   = tmax;
+  cortadoAberta = false;
 
   tCurva = 0;
-  alvo = interpolar(curva, nPontos, 0);
+  alvo = malhaAberta ? tMaxAberta : interpolar(curva, nPontos, 0);
   controlador.reiniciar();
   monitor.reiniciar();
   falhaAtual = FALHA_NENHUMA;
@@ -465,6 +545,9 @@ void processarComando(JsonDocument& doc) {
   else if (strcmp(cmd, "wifiForget") == 0) {
     if (estado == EST_RUNNING) { enviarWifi("busy", "Espere o ciclo terminar para trocar de rede."); return; }
     pedidoEsquecer = true;
+  }
+  else if (strcmp(cmd, "params") == 0) {
+    comandoParametros(doc);
   }
   else if (strcmp(cmd, "start") == 0) {
     iniciarCiclo(doc);
@@ -542,8 +625,14 @@ void controlar(float dt) {
   tempAtual = sensor.temperatura();
 
   duty = 0;
-  if (estado == EST_RUNNING && sensor.ok()) {
-    tCurva += dt * velocidadeCurva(curva, nPontos, tCurva, tempAtual);
+  if (estado == EST_RUNNING && sensor.ok() && malhaAberta) {
+    // teste de identificação: potência programada, tempo real, corte em tMaxAberta
+    tCurva += dt;
+    alvo = tMaxAberta;   // para o monitor: com potência alta a temperatura precisa subir
+    if (tCurva >= curva[nPontos-1].t) mudarEstado(EST_DONE);
+    else duty = dutyMalhaAberta(curva, nPontos, tCurva, tempAtual, tMaxAberta, cortadoAberta);
+  } else if (estado == EST_RUNNING && sensor.ok()) {
+    tCurva += dt * controlador.velocidade(curva, nPontos, tCurva, tempAtual);
     alvo = interpolar(curva, nPontos, tCurva);
     if (tCurva >= curva[nPontos-1].t) mudarEstado(EST_DONE);
     else duty = controlador.calcular(curva, nPontos, tCurva, tempAtual, dt);

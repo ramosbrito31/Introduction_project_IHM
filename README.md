@@ -9,6 +9,7 @@ O site escolhe a curva de temperatura, o ESP32 lê o termopar e aciona a resist�
 | `lib/Controle/` | Lógica do controle e das proteções, sem dependência do Arduino |
 | `data/index.html` | O site (vai para a memória da placa) |
 | `test/test_controle/` | Testes do controle no PC, com uma placa simulada |
+| `bancada/` | Bateria de testes automática na placa real, análise dos logs e otimização do controle ([guia](bancada/README.md)) |
 
 ## Materiais
 
@@ -136,13 +137,18 @@ Depois de um erro, a placa aceita um novo ciclo assim que o problema for resolvi
 A cada 250 ms o firmware lê o termopar e calcula a potência:
 
 - **Feed-forward:** usa o modelo da placa para estimar a potência que a curva exige, antecipando o atraso térmico.
-- **PI:** corrige o erro que sobrar.
+- **PI:** corrige o erro que sobrar. A integral só acumula perto da curva (`bandaI`), para não "carregar" nas rampas e passar do ponto depois.
+- **Freio preditivo (contra overshoot):** a placa não resfria sozinha rápido, e o calor que já está na resistência continua chegando depois que o SSR desliga. A cada leitura o controle simula o modelo da placa à frente e limita a potência para que, mesmo desligando logo em seguida, a temperatura prevista não passe do maior alvo da curva nos próximos segundos + `margem`.
 - **Janela do SSR:** a potência vira a fração ligada de cada janela de 1 s.
-- **Curva que espera:** numa subida, se a placa ficar mais de 4 °C para trás, o relógio da curva desacelera. Assim o pico é atingido mesmo em uma placa lenta, e o ciclo pode durar mais que a curva.
+- **Curva que espera:** numa subida, se a placa ficar mais de `folga` °C para trás (4 °C de fábrica), o relógio da curva desacelera. Perto do topo de cada subida a folga cai para 1 °C, para a placa chegar ao pico antes de a descida começar. Assim o pico é atingido mesmo em uma placa lenta, e o ciclo pode durar mais que a curva.
 
 ## Calibração
 
-Os valores de fábrica em `src/main.cpp` (`PARAM_CONTROLE`) são estimativas, porque ainda não foram medidos em uma placa real. **Calibre antes de soldar qualquer coisa**, começando com a placa vazia e vigiada:
+Os valores de fábrica em `src/main.cpp` (`PARAM_CONTROLE`) são estimativas, porque ainda não foram medidos em uma placa real. **Calibre antes de soldar qualquer coisa**, começando com a placa vazia e vigiada.
+
+**Automática (recomendada):** a [bancada de testes](bancada/README.md) roda uma bateria de curvas pelo Wi-Fi, identifica o modelo da placa pelos logs e otimiza todos os parâmetros num simulador que usa o mesmo código do firmware.
+
+**Manual:**
 
 1. **`pMax` e `atraso`:** no modo Estático, peça 300 °C e clique em **Parar** ao chegar a uns 150 °C. No CSV baixado, olhe o começo da subida: `pMax = subida em °C/s ÷ (duty ÷ 100)`, e `atraso` é o tempo entre a potência subir e a temperatura começar a reagir. O `pMax` em `src/main.cpp` é o valor **em 220 V**: se calibrar em 127 V, multiplique o que medir por 3.
 2. **`perda`:** continue registrando o resfriamento em uma curva terminada em descida. Entre dois instantes, `perda = (queda em °C/s) / (temperatura − ambiente)`.

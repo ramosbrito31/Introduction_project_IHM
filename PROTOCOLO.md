@@ -46,6 +46,9 @@ Todas as mensagens são **JSON em texto**, uma por frame. A página reconecta so
 | `msg` | em `error` | Motivo do erro, para quem abriu a página depois da falha. |
 | `vac` | opcional | Tensão da rede medida pelo ZMPT101B (V). `null` sem sensor, sem calibração ou sem leitura válida. |
 | `vuse` | opcional | Tensão que o controle está considerando (V): a medida, ou a manual. |
+| `u` | opcional | `duty` com uma casa decimal (bancada de testes). |
+| `ms` | opcional | `millis()` da placa, para a bancada medir o tempo sem depender do Wi-Fi. |
+| `ctl` | durante ciclo | Partes do controle: `[feed-forward %, proporcional %, integral %, teto do freio %, potência a caminho 0–1]`. Ausente em malha aberta. |
 
 A página só plota pontos quando `state == "running"` e `t` cresce. Se `t` voltar para trás, entende como novo ciclo.
 Sem telemetria por 4 s → indicador "Sem dados".
@@ -141,6 +144,20 @@ ESP32 → página:
 | `sat` | A onda bate no limite do ADC: baixar o trimpot. |
 | `vac` | Tensão medida (V), ou `null`. |
 | `vuse` / `src` | Tensão em uso pelo controle e de onde vem: `sensor` ou `manual`. |
+
+## Bancada de testes (`bancada/`)
+
+Comandos usados pelos scripts de teste. A página não precisa deles.
+
+| Comando | Exemplo | Resposta |
+|---|---|---|
+| `params` (ler) | `{"cmd":"params"}` | `params` com `p` = parâmetros do controle em uso |
+| `params` (trocar) | `{"cmd":"params","set":{"kp":3,"atraso":20}}` | `params` com `event: applied`, ou `failed` com `msg`. Recusado durante o ciclo (`busy`). Vale até reiniciar. |
+| `params` (gravar) | `{"cmd":"params","set":{...},"save":true}` | `event: saved`: grava na flash e passa a valer ao ligar. |
+| `params` (fábrica) | `{"cmd":"params","reset":true}` | Volta a `PARAM_CONTROLE` do firmware e apaga o que estava gravado. |
+| `start` em malha aberta | `{"cmd":"start","mode":"open","tmax":200,"profile":{"name":"degrau","pts":[[0,100],[300,100]]}}` | Igual ao `start` normal. Os pontos são `[tempo_s, potência_%]` (até 100). Ao atingir `tmax` (até 280 °C) a potência é cortada até o fim do teste. As proteções continuam valendo. |
+
+Parâmetros (`p`): `pMax`, `perda`, `tAmb`, `atraso`, `kp`, `ki`, `iMax`, `margem`, `bandaI`, `folga`. Ver `ParamControle` em `lib/Controle/Controle.h`.
 
 ## Regras do lado da página
 - Superfície quente: badge pulsante quando `temp ≥ 50 °C` (constante `HOT_C`).

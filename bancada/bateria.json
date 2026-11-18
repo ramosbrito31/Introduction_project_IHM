@@ -1,0 +1,115 @@
+{
+  "descricao": "Bateria padrão: identificação da placa, limites de aquecimento/resfriamento, seguimento de curva e perfis de solda.",
+  "seguranca": {
+    "temp_max_absoluta": 275,
+    "temp_inicio_max": 45,
+    "pos_ciclo_s": 150,
+    "sem_telemetria_s": 10
+  },
+  "tipos": {
+    "aberta": "malha aberta: os pontos são [tempo_s, potência_%]; corta a potência ao atingir tmax e não liga mais",
+    "curva": "controle normal seguindo [tempo_s, temperatura_C]",
+    "estatico": "igual a curva, mas enviado como modo estático"
+  },
+  "testes": [
+    {
+      "nome": "id_degrau_100",
+      "grupo": "identificacao",
+      "tipo": "aberta",
+      "descricao": "100% até 170 °C e resfriamento livre: velocidade máxima, atraso e calor acumulado após o corte",
+      "tmax": 170,
+      "pts": [[0, 100], [420, 100]]
+    },
+    {
+      "nome": "id_degrau_40",
+      "grupo": "identificacao",
+      "tipo": "aberta",
+      "descricao": "40% por 6 min e depois desligada: linearidade e perda de calor em regime",
+      "tmax": 210,
+      "pts": [[0, 40], [360, 40], [360.5, 0], [600, 0]]
+    },
+    {
+      "nome": "id_pulsos",
+      "grupo": "identificacao",
+      "tipo": "aberta",
+      "descricao": "Três pulsos de 15 s a 100%: separa o atraso da resistência do atraso do sensor",
+      "tmax": 170,
+      "pts": [[0, 100], [15, 100], [15.5, 0], [75, 0], [75.5, 100], [90, 100], [90.5, 0],
+              [150, 0], [150.5, 100], [165, 100], [165.5, 0], [330, 0]]
+    },
+    {
+      "nome": "lim_aquecimento_maximo",
+      "grupo": "limites",
+      "tipo": "aberta",
+      "descricao": "100% até 235 °C e resfriamento livre: limite de aquecimento em toda a faixa e limite de resfriamento a partir do pico",
+      "tmax": 235,
+      "pts": [[0, 100], [900, 100]]
+    },
+    {
+      "nome": "lim_rampa_impossivel",
+      "grupo": "limites",
+      "tipo": "curva",
+      "descricao": "Pede 5 °C/s até 230 °C (mais do que a placa consegue): testa a curva que espera e o overshoot chegando no máximo",
+      "pts": [[0, 25], [40, 230], [200, 230]]
+    },
+    {
+      "nome": "lim_descidas",
+      "grupo": "limites",
+      "tipo": "curva",
+      "descricao": "Patamar em 200 °C e descidas de 0,5 e 1,5 °C/s: até onde o resfriamento natural acompanha",
+      "pts": [[0, 25], [120, 200], [180, 200], [280, 150], [340, 150], [400, 60]]
+    },
+    {
+      "nome": "seg_degrau_120",
+      "grupo": "seguimento",
+      "tipo": "estatico",
+      "descricao": "Degrau para 120 °C: overshoot ao chegar no patamar",
+      "pts": [[0, 25], [1, 120], [300, 120]]
+    },
+    {
+      "nome": "seg_rampa_1",
+      "grupo": "seguimento",
+      "tipo": "curva",
+      "descricao": "Rampa de 1 °C/s até 150 °C e patamar de 4 min",
+      "pts": [[0, 25], [125, 150], [365, 150]]
+    },
+    {
+      "nome": "seg_rampa_2",
+      "grupo": "seguimento",
+      "tipo": "curva",
+      "descricao": "Rampa de 2 °C/s até 205 °C e patamar",
+      "pts": [[0, 25], [90, 205], [300, 205]]
+    },
+    {
+      "nome": "seg_escada",
+      "grupo": "seguimento",
+      "tipo": "curva",
+      "descricao": "Patamares em 100, 150, 200 e 230 °C: overshoot e estabilidade em várias temperaturas",
+      "pts": [[0, 25], [60, 100], [150, 100], [190, 150], [280, 150], [320, 200], [410, 200], [440, 230], [520, 230]]
+    },
+    {
+      "nome": "perfil_sac305",
+      "grupo": "perfis",
+      "tipo": "curva",
+      "liq": 217,
+      "descricao": "SAC305 (sem chumbo), igual ao site",
+      "pts": [[0, 25], [90, 150], [180, 180], [210, 217], [240, 245], [270, 217], [360, 50]]
+    },
+    {
+      "nome": "perfil_sn63pb37",
+      "grupo": "perfis",
+      "tipo": "curva",
+      "liq": 183,
+      "descricao": "Sn63Pb37 (com chumbo), igual ao site",
+      "pts": [[0, 25], [90, 150], [180, 165], [205, 183], [225, 220], [255, 183], [330, 50]]
+    },
+    {
+      "nome": "perfil_sn42bi58",
+      "grupo": "perfis",
+      "tipo": "curva",
+      "liq": 138,
+      "descricao": "Sn42Bi58 (baixa temperatura), igual ao site",
+      "pts": [[0, 25], [60, 90], [150, 120], [170, 138], [195, 165], [225, 138], [300, 50]]
+    }
+  ]
+}

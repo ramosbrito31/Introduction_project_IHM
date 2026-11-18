@@ -22,8 +22,8 @@ const char* validarCurva(const Ponto* curva, int n);
 
 // Velocidade do relógio da curva (0,05 a 1). Numa subida, se a placa ficar para
 // trás, a curva a espera: senão o tempo acabaria antes de a placa chegar ao pico
-// e a solda sairia ruim sem nenhum aviso.
-float velocidadeCurva(const Ponto* curva, int n, float t, float tempC);
+// e a solda sairia ruim sem nenhum aviso. folga = atraso (°C) tolerado sem esperar.
+float velocidadeCurva(const Ponto* curva, int n, float t, float tempC, float folga = 4.0f);
 
 // ------------------------------------------------------------------
 // Sensor: termopar tipo K com MAX6675
@@ -48,12 +48,17 @@ private:
 };
 
 // ------------------------------------------------------------------
-// Controlador: PI + feed-forward
+// Controlador: PI + feed-forward + freio preditivo
 // ------------------------------------------------------------------
-// A potência vem de duas partes:
+// A potência vem de três partes:
 //  - feed-forward: o que o modelo da placa diz ser necessário para seguir a
 //    curva (é conhecida de antemão, então dá para antecipar o atraso térmico);
-//  - PI: corrige o que sobrar de erro.
+//  - PI: corrige o que sobrar de erro;
+//  - freio preditivo (contra overshoot): a placa não resfria ativamente, então
+//    o calor já "a caminho" (resistência quente, atraso do sensor) continua
+//    subindo a temperatura depois que o SSR desliga. O controle simula o modelo
+//    da placa à frente e limita a potência para que, mesmo desligando logo
+//    depois, a temperatura prevista não passe da curva + margem.
 struct ParamControle {
   float pMax;    // °C/s: velocidade de subida com 100% de potência
   float perda;   // 1/s:  perda de calor (°C/s por °C acima do ambiente)
@@ -62,7 +67,16 @@ struct ParamControle {
   float kp;      // %/°C
   float ki;      // %/(°C·s)
   float iMax;    // %:    limite da parte integral
+  float margem;  // °C:   folga do freio preditivo acima da curva (negativo = freio desligado)
+  float bandaI;  // °C:   só integra com |erro| menor que isto (evita acumular nas rampas)
+  float folga;   // °C:   atraso tolerado antes de a curva esperar a placa (ver velocidadeCurva)
 };
+
+// Nomes dos campos (mesma ordem da struct), para o site, a bancada e a flash
+const int N_PARAM = 10;
+extern const char* const NOMES_PARAM[N_PARAM];
+float*       campoParam(ParamControle& p, int i);
+const char*  validarParam(int i, float v);   // nullptr = valor aceitável
 
 // Tensão da rede. A resistência da placa é de 220 V e o pMax dos parâmetros vale
 // nessa tensão. Em outra tensão a potência muda com o quadrado dela (P = V²/R):
@@ -75,18 +89,45 @@ const float TENSAO_MAX = 260.0f;
 bool          tensaoValida(int volts);   // manual: só 127 ou 220
 ParamControle paramParaTensao(ParamControle p, float volts);   // fora da faixa: não mexe
 
+// Partes da última saída, para os logs da bancada de testes
+struct DiagControle {
+  float ff;     // %  feed-forward
+  float p;      // %  proporcional
+  float i;      // %  integral
+  float teto;   // %  limite do freio preditivo (100 = não freou)
+  float uf;     // 0..1 potência "a caminho" estimada pelo modelo interno
+};
+
 class Controlador {
 public:
   explicit Controlador(const ParamControle& p) : p_(p) {}
   // Troca os parâmetros sem zerar a integral (a tensão da rede pode mudar durante o ciclo)
   void  definirParametros(const ParamControle& p) { p_ = p; }
-  void  reiniciar() { integral_ = 0; }
+  void  reiniciar() { integral_ = 0; uf_ = 0; dutyAnt_ = 0; diag_ = DiagControle{0, 0, 0, 100, 0}; }
   // Retorna a potência (duty) de 0 a 100 %. dt = segundos desde a última chamada.
   float calcular(const Ponto* curva, int n, float t, float tempC, float dt);
+  // Velocidade do relógio da curva com a folga destes parâmetros
+  float velocidade(const Ponto* curva, int n, float t, float tempC) const {
+    return velocidadeCurva(curva, n, t, tempC, p_.folga);
+  }
+  const DiagControle& diag() const { return diag_; }
 private:
+  float tetoFreio(const Ponto* curva, int n, float t, float vel, float tempC) const;
   ParamControle p_;
   float integral_ = 0;
+  float uf_ = 0;        // modelo interno: fração da potência que já está chegando à placa
+  float dutyAnt_ = 0;   // última saída (é o que o SSR está aplicando)
+  DiagControle diag_ = {0, 0, 0, 100, 0};
 };
+
+// ------------------------------------------------------------------
+// Malha aberta (só para a bancada de testes / identificação da placa)
+// ------------------------------------------------------------------
+// Os pontos da "curva" são potências (%) em vez de temperaturas. Ao atingir
+// tMax a potência é cortada até o fim do teste (e não volta).
+float dutyMalhaAberta(const Ponto* curva, int n, float t, float tempC, float tMax, bool& cortado);
+const char* validarMalhaAberta(const Ponto* curva, int n, float tMax);
+const float TEMP_MAX_MALHA_ABERTA = 280.0f;
 
 // ------------------------------------------------------------------
 // SSR: potência por janela de tempo

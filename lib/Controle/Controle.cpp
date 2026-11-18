@@ -26,13 +26,20 @@ const char* validarCurva(const Ponto* c, int n) {
   return nullptr;
 }
 
-float velocidadeCurva(const Ponto* c, int n, float t, float tempC) {
-  // Atraso de regime = FOLGA + parte da FAIXA. Precisa ser pequeno, porque é o
-  // quanto a placa fica abaixo do pico quando o trecho de subida termina.
-  const float FOLGA = 4.0f, FAIXA = 4.0f, MINIMA = 0.05f;   // °C, °C, fração
+float velocidadeCurva(const Ponto* c, int n, float t, float tempC, float folga) {
+  // Atraso de regime = folga + parte da FAIXA. Perto do topo de cada subida (o pico
+  // do perfil, ou a entrada de um patamar) a folga diminui até FOLGA_TOPO: senão a
+  // descida começaria com a placa ainda abaixo do pico e ela nunca chegaria lá.
+  const float FAIXA = 4.0f, MINIMA = 0.05f;     // °C, fração
+  const float APROX = 15.0f, FOLGA_TOPO = 1.0f; // °C
   float alvo = interpolar(c, n, t);
   if (interpolar(c, n, t + 1.0f) <= alvo) return 1.0f;      // só espera nas subidas
-  return limitar(1.0f - (alvo - tempC - FOLGA) / FAIXA, MINIMA, 1.0f);
+  int i = 0;
+  while (i < n - 1 && c[i].t <= t) i++;                     // próximo ponto
+  while (i < n - 1 && c[i+1].T > c[i].T) i++;               // fim desta subida
+  float f = folga * limitar((c[i].T - alvo) / APROX, 0.0f, 1.0f);
+  if (f < FOLGA_TOPO) f = folga < FOLGA_TOPO ? folga : FOLGA_TOPO;
+  return limitar(1.0f - (alvo - tempC - f) / FAIXA, MINIMA, 1.0f);
 }
 
 // ------------------------------------------------------------------
@@ -74,26 +81,115 @@ ParamControle paramParaTensao(ParamControle p, float volts) {
   return p;
 }
 
+const char* const NOMES_PARAM[N_PARAM] = {
+  "pMax", "perda", "tAmb", "atraso", "kp", "ki", "iMax", "margem", "bandaI", "folga" };
+
+float* campoParam(ParamControle& p, int i) {
+  switch (i) {
+    case 0: return &p.pMax;   case 1: return &p.perda;  case 2: return &p.tAmb;
+    case 3: return &p.atraso; case 4: return &p.kp;     case 5: return &p.ki;
+    case 6: return &p.iMax;   case 7: return &p.margem; case 8: return &p.bandaI;
+    case 9: return &p.folga;
+    default: return nullptr;
+  }
+}
+
+const char* validarParam(int i, float v) {
+  static const float MIN[N_PARAM] = { 0.1f, 0.0f,  0.0f,   0.1f, 0.0f,   0.0f,  0.0f,  -1.0f,   0.5f,  0.0f };
+  static const float MAX[N_PARAM] = { 20.0f, 0.1f, 50.0f, 120.0f, 100.0f, 10.0f, 100.0f, 50.0f, 300.0f, 30.0f };
+  if (i < 0 || i >= N_PARAM) return "Parâmetro desconhecido.";
+  if (!(v >= MIN[i] && v <= MAX[i])) return "Parâmetro fora da faixa permitida.";
+  return nullptr;
+}
+
+// Maior duty (%) que pode ser aplicado agora (por uma janela do SSR) sem que a
+// temperatura prevista passe da curva + margem, mesmo com a resistência
+// desligada logo depois. O modelo é linear, então a previsão é
+//     T(τ) = resposta livre(τ) + duty × resposta a 100%(τ)
+// e o limite sai direto, sem tentativa e erro.
+float Controlador::tetoFreio(const Ponto* c, int n, float t, float vel, float T) const {
+  const float DT = 0.25f;      // s: passo da previsão
+  const float SEGURA = 1.0f;   // s: o duty de agora vale por uma janela do SSR
+  float tau = p_.atraso > 0.05f ? p_.atraso : 0.05f;
+  float a = 1.0f - expf(-DT / tau);
+  float H = limitar(6.0f * tau, 10.0f, 120.0f);
+  int passos = (int)(H / DT);
+
+  float Tl = T, xl = uf_;      // resposta livre: desliga agora
+  float Ts = 0, xs = 0;        // resposta a 100% por SEGURA s, partindo do zero
+  float teto = 1e9f;
+  float maxCurva = interpolar(c, n, t);   // maior alvo daqui até τ: depois do pico a
+                                           // curva desce, mas chegar ao pico é permitido
+  for (int k = 1; k <= passos; k++) {
+    float tk = k * DT;
+    float us = (tk - DT < SEGURA) ? 1.0f : 0.0f;
+    xl += (0.0f - xl) * a;
+    xs += (us - xs) * a;
+    Tl += (p_.pMax * xl - p_.perda * (Tl - p_.tAmb)) * DT;
+    Ts += (p_.pMax * xs - p_.perda * Ts) * DT;
+    // não exige baixar (isso é papel do PI): só não deixa subir além da curva
+    float a2 = interpolar(c, n, t + tk * vel);
+    if (a2 > maxCurva) maxCurva = a2;
+    float lim = maxCurva + p_.margem;
+    if (lim < T) lim = T;
+    if (Ts > 1e-4f) {
+      float u = (lim - Tl) / Ts;
+      if (u < teto) teto = u;
+    }
+    if (tk > SEGURA && xl < 0.003f && xs < 0.003f) break;   // nada mais chegando
+  }
+  return limitar(teto * 100.0f, 0.0f, 100.0f);
+}
+
 float Controlador::calcular(const Ponto* c, int n, float t, float tempC, float dt) {
+  // modelo interno: a potência aplicada chega à placa com o atraso
+  float tau = p_.atraso > 0.05f ? p_.atraso : 0.05f;
+  uf_ += (dutyAnt_ / 100.0f - uf_) * (1.0f - expf(-dt / tau));
+
   // Olha "atraso" segundos à frente: o calor de agora só aparece no sensor depois.
   // São segundos reais: com a curva esperando a placa, isso é menos tempo de curva
   // (senão, perto do pico, enxergaria a descida e cortaria a potência antes da hora).
-  float vel     = velocidadeCurva(c, n, t, tempC);
+  float vel     = velocidade(c, n, t, tempC);
   float tAdiante = t + p_.atraso * vel;
   float adiante = interpolar(c, n, tAdiante);
   float subida  = (interpolar(c, n, tAdiante + 1.0f) - adiante) * vel;   // °C/s reais
   float ff = (p_.perda * (adiante - p_.tAmb) + subida) / p_.pMax * 100.0f;
 
   float erro = interpolar(c, n, t) - tempC;
-  float semI = ff + p_.kp * erro;
+  float p    = p_.kp * erro;
+  float semI = ff + p;
+  float teto = p_.margem >= 0 ? tetoFreio(c, n, t, vel, tempC) : 100.0f;
 
-  // anti-windup: não acumula integral com a saída saturada no mesmo sentido do erro
-  bool saturadoAlto  = semI + integral_ >= 100.0f && erro > 0;
-  bool saturadoBaixo = semI + integral_ <= 0.0f   && erro < 0;
-  if (!saturadoAlto && !saturadoBaixo)
+  // anti-windup: não acumula integral com a saída saturada (ou freada) no mesmo
+  // sentido do erro, nem longe da curva (rampas e degraus)
+  bool saturadoAlto  = semI + integral_ >= teto && erro > 0;
+  bool saturadoBaixo = semI + integral_ <= 0.0f && erro < 0;
+  bool naBanda       = erro < p_.bandaI && -erro < p_.bandaI;
+  if (!saturadoAlto && !saturadoBaixo && naBanda)
     integral_ = limitar(integral_ + p_.ki * erro * dt, -p_.iMax, p_.iMax);
 
-  return limitar(semI + integral_, 0.0f, 100.0f);
+  float u = limitar(semI + integral_, 0.0f, teto);
+  dutyAnt_ = u;
+  diag_ = DiagControle{ff, p, integral_, teto, uf_};
+  return u;
+}
+
+// ------------------------------------------------------------------
+// Malha aberta
+// ------------------------------------------------------------------
+const char* validarMalhaAberta(const Ponto* c, int n, float tMax) {
+  const char* e = validarCurva(c, n);
+  if (e) return e;
+  for (int i = 0; i < n; i++)
+    if (!(c[i].T <= 100.0f)) return "Malha aberta: potência acima de 100%.";
+  if (!(tMax > 0 && tMax <= TEMP_MAX_MALHA_ABERTA)) return "Malha aberta: tmax fora do limite (até 280 °C).";
+  return nullptr;
+}
+
+float dutyMalhaAberta(const Ponto* c, int n, float t, float tempC, float tMax, bool& cortado) {
+  if (tempC >= tMax) cortado = true;
+  if (cortado) return 0.0f;
+  return limitar(interpolar(c, n, t), 0.0f, 100.0f);
 }
 
 // ------------------------------------------------------------------
