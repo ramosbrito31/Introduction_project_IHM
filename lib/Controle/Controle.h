@@ -64,9 +64,22 @@ struct ParamControle {
   float iMax;    // %:    limite da parte integral
 };
 
+// Tensão da rede. A resistência da placa é de 220 V e o pMax dos parâmetros vale
+// nessa tensão. Em outra tensão a potência muda com o quadrado dela (P = V²/R):
+// em 127 V fica em cerca de 1/3, e o feed-forward precisa saber disso.
+// A tensão vem do sensor (ZMPT101B na rede) ou, sem ele, do valor manual do site.
+const int   TENSAO_NOMINAL_PLACA = 220;
+const int   TENSAO_PADRAO        = 220;
+const float TENSAO_MIN = 90.0f;     // V: fora desta faixa a medição é tratada como inválida
+const float TENSAO_MAX = 260.0f;
+bool          tensaoValida(int volts);   // manual: só 127 ou 220
+ParamControle paramParaTensao(ParamControle p, float volts);   // fora da faixa: não mexe
+
 class Controlador {
 public:
   explicit Controlador(const ParamControle& p) : p_(p) {}
+  // Troca os parâmetros sem zerar a integral (a tensão da rede pode mudar durante o ciclo)
+  void  definirParametros(const ParamControle& p) { p_ = p; }
   void  reiniciar() { integral_ = 0; }
   // Retorna a potência (duty) de 0 a 100 %. dt = segundos desde a última chamada.
   float calcular(const Ponto* curva, int n, float t, float tempC, float dt);
@@ -95,35 +108,34 @@ private:
 // ------------------------------------------------------------------
 // Proteções
 // ------------------------------------------------------------------
-enum Falha { FALHA_NENHUMA, FALHA_SENSOR, FALHA_SOBRETEMP, FALHA_SEM_RESPOSTA, FALHA_SSR_PRESO, FALHA_SEM_TENSAO };
+enum Falha { FALHA_NENHUMA, FALHA_SENSOR, FALHA_SOBRETEMP, FALHA_SEM_RESPOSTA, FALHA_SSR_PRESO };
 
 const char* textoFalha(Falha f);
 
-// Sensor de tensão (ZMPT101B) ligado nos terminais da placa, depois do SSR.
-// Compara o que foi mandado ao SSR com o que chega de fato à placa.
-class MonitorTensao {
+// Sensor de tensão (ZMPT101B) ligado na rede elétrica, ANTES do SSR.
+// Calcula o valor eficaz (RMS) da onda. Para virar volts, multiplica por um
+// fator de calibração (medido uma vez com um multímetro, pelo site).
+class MedidorRede {
 public:
-  // Chamar a cada 1 ms, aproximadamente, com a leitura do ADC e o estado do pino do SSR.
-  void  amostra(uint32_t agoraMs, int adc, bool ssrLigado);
-  Falha falha() const;
-  void  reiniciar();
-  int   amplitude() const { return amplitude_; }   // última, de pico a pico, em contagens do ADC
+  // Chamar a cada 1 ms, aproximadamente, com a leitura do ADC.
+  void  amostra(uint32_t agoraMs, int adc);
+  // Há onda suficiente para medir (sensor ligado e rede presente)?
+  bool  temLeitura() const { return valida_ && rms_ >= RMS_MIN; }
+  float rmsContagens() const { return rms_; }   // valor eficaz, em contagens do ADC (média móvel)
+  bool  saturado() const { return saturado_; }  // a onda bate no limite do ADC: reduza o trimpot
 private:
-  static const uint32_t BLOCO_MS = 40;          // mais de 2 ciclos da rede, em 50 ou 60 Hz
-  static const int AMOSTRAS_MIN = 15;           // bloco com menos que isso é descartado
-  static const int LIMIAR = 400;                // contagens: abaixo disso, considera sem tensão
-  static const int BLOCOS_FALHA = 10;           // blocos seguidos até declarar falha
+  static const uint32_t BLOCO_MS = 200;     // 10 ciclos em 50 Hz, 12 em 60 Hz
+  static const int AMOSTRAS_MIN = 100;      // bloco com menos que isso é descartado
+  static constexpr float RMS_MIN = 15.0f;   // contagens: abaixo disso, considera sem onda
+  static constexpr float SUAVIZA = 0.3f;    // peso do bloco novo na média
 
   void fecharBloco();
 
-  bool     iniciado_ = false;
-  bool     ultimoSsr_ = false;
+  bool     iniciado_ = false, valida_ = false, saturado_ = false;
   uint32_t inicio_ = 0;
   int      n_ = 0, min_ = 0, max_ = 0;
-  int      descartar_ = 0;     // blocos a ignorar depois de o SSR mudar de estado
-  int      amplitude_ = 0;
-  int      comTensao_ = 0;     // blocos seguidos com tensão e SSR desligado
-  int      semTensao_ = 0;     // blocos seguidos sem tensão e SSR ligado
+  int64_t  soma_ = 0, somaQ_ = 0;
+  float    rms_ = 0;
 };
 
 class MonitorSeguranca {

@@ -1,4 +1,5 @@
 #include "Controle.h"
+#include <math.h>
 
 static float limitar(float v, float a, float b) { return v < a ? a : (v > b ? b : v); }
 
@@ -63,6 +64,16 @@ void LeituraSensor::atualizar(bool valida, float tempC) {
 // ------------------------------------------------------------------
 // Controlador
 // ------------------------------------------------------------------
+bool tensaoValida(int v) { return v == 127 || v == 220; }
+
+ParamControle paramParaTensao(ParamControle p, float volts) {
+  if (volts >= TENSAO_MIN && volts <= TENSAO_MAX) {
+    float r = volts / TENSAO_NOMINAL_PLACA;
+    p.pMax *= r * r;
+  }
+  return p;
+}
+
 float Controlador::calcular(const Ponto* c, int n, float t, float tempC, float dt) {
   // Olha "atraso" segundos à frente: o calor de agora só aparece no sensor depois.
   // São segundos reais: com a curva esperando a placa, isso é menos tempo de curva
@@ -111,56 +122,33 @@ const char* textoFalha(Falha f) {
     case FALHA_SOBRETEMP:    return "Temperatura acima do limite de segurança.";
     case FALHA_SEM_RESPOSTA: return "A temperatura não sobe: confira resistência, SSR e termopar.";
     case FALHA_SSR_PRESO:    return "Resistência energizada com o SSR desligado: SSR em curto? TIRE DA TOMADA.";
-    case FALHA_SEM_TENSAO:   return "SSR ligado, mas sem tensão na placa: confira fusível, SSR e rede.";
     default:                 return "";
   }
 }
 
-void MonitorTensao::reiniciar() {
-  comTensao_ = semTensao_ = 0;
-}
-
-void MonitorTensao::fecharBloco() {
+void MedidorRede::fecharBloco() {
   if (n_ < AMOSTRAS_MIN) return;
-  amplitude_ = max_ - min_;
-  if (descartar_ > 0) { descartar_--; return; }
-
-  bool temTensao = amplitude_ >= LIMIAR;
-  if (ultimoSsr_) {
-    semTensao_ = temTensao ? 0 : semTensao_ + 1;
-  } else {
-    comTensao_ = temTensao ? comTensao_ + 1 : 0;
-  }
+  float media = (float)soma_ / n_;
+  float var = (float)somaQ_ / n_ - media * media;
+  float rms = var > 0 ? sqrtf(var) : 0;
+  saturado_ = min_ <= 5 || max_ >= 4090;     // ADC de 12 bits: 0 a 4095
+  rms_ = valida_ ? rms_ + (rms - rms_) * SUAVIZA : rms;
+  valida_ = true;
 }
 
-void MonitorTensao::amostra(uint32_t agora, int adc, bool ssrLigado) {
-  if (!iniciado_) {
-    iniciado_ = true;
-    ultimoSsr_ = ssrLigado;
-    inicio_ = agora;
-    n_ = 0;
-  }
-  if (ssrLigado != ultimoSsr_) {
-    // Este bloco ficou misturado. O seguinte também é ignorado, porque o SSR
-    // só muda na próxima passagem por zero da rede.
-    ultimoSsr_ = ssrLigado;
-    descartar_ = 2;
-  }
+void MedidorRede::amostra(uint32_t agora, int adc) {
+  if (!iniciado_) { iniciado_ = true; inicio_ = agora; n_ = 0; }
   if (agora - inicio_ >= BLOCO_MS) {
     fecharBloco();
     inicio_ = agora;
     n_ = 0;
   }
-  if (n_ == 0) { min_ = max_ = adc; }
+  if (n_ == 0) { min_ = max_ = adc; soma_ = somaQ_ = 0; }
   if (adc < min_) min_ = adc;
   if (adc > max_) max_ = adc;
+  soma_  += adc;
+  somaQ_ += (int64_t)adc * adc;
   n_++;
-}
-
-Falha MonitorTensao::falha() const {
-  if (comTensao_ >= BLOCOS_FALHA) return FALHA_SSR_PRESO;
-  if (semTensao_ >= BLOCOS_FALHA) return FALHA_SEM_TENSAO;
-  return FALHA_NENHUMA;
 }
 
 void MonitorSeguranca::reiniciar() {

@@ -89,10 +89,13 @@ button{cursor:pointer}
 /* ---------- controles ---------- */
 .controls{padding:16px;display:flex;flex-direction:column;gap:12px}
 .tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--panel2);border-radius:10px;padding:3px}
-.tab{background:transparent;border:0;border-radius:8px;padding:8px;font-size:13px;color:var(--muted)}
-.tab.active{background:var(--line);color:var(--text)}
-.tab:disabled{cursor:default}
-label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
+.tab,.seg{background:transparent;border:0;border-radius:8px;padding:8px;font-size:13px;color:var(--muted)}
+.tab.active,.seg.active{background:var(--line);color:var(--text)}
+.tab:disabled,.seg:disabled{cursor:default}
+.segs{display:grid;grid-template-columns:1fr 1fr;background:var(--panel2);border-radius:10px;padding:3px}
+.seg{font-family:var(--mono);font-size:14px;padding:10px}
+.seg:disabled:not(.active){opacity:.5}
+label,.field{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
 select,input{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 10px;font-size:14px;width:100%}
 select:disabled,input:disabled{opacity:.55}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -117,6 +120,7 @@ select:disabled,input:disabled{opacity:.55}
 .wstat b{font-family:var(--mono);font-weight:500}
 .wstat .k{color:var(--muted);display:inline-block;min-width:92px}
 .whelp{margin:0;font-size:12px;color:var(--muted);line-height:1.5}
+.whelp.warn{color:var(--warn)}
 .inrow{display:flex;gap:8px}
 .inrow input{flex:1;min-width:0}
 .wlist{display:flex;flex-direction:column;gap:4px;max-height:200px;overflow:auto;background:var(--panel2);border-radius:10px;padding:4px}
@@ -179,6 +183,7 @@ select:disabled,input:disabled{opacity:.55}
     <span id="hotBadge" class="hot" hidden title="Superfície quente">⚠ <span>Superfície quente</span></span>
     <span id="conn" class="pill">Conectando…</span>
     <button id="wifiBtn" class="icon" title="Rede Wi-Fi" aria-label="Rede Wi-Fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/></svg></button>
+    <button id="cfgBtn" class="icon" title="Configurações avançadas" aria-label="Configurações avançadas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
     <button id="muteBtn" class="icon" title="Som do aviso de término" aria-label="Som"></button>
   </div>
 </header>
@@ -302,6 +307,41 @@ select:disabled,input:disabled{opacity:.55}
     <button id="wConnect" class="primary">Conectar a esta rede</button>
     <div id="wMsg" class="wmsg" hidden></div>
     <button id="wForget" class="link" type="button" hidden>Esquecer a rede salva e usar só a rede própria</button>
+  </div>
+</div>
+
+<div id="cfgModal" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="cTitle">
+    <div class="sheet-head">
+      <h3 id="cTitle">Configurações avançadas</h3>
+      <button id="cClose" class="icon" aria-label="Fechar">✕</button>
+    </div>
+    <div id="cStatus" class="wstat">Consultando a placa…</div>
+    <p class="whelp">A resistência da placa é de 220 V. Em outra tensão a potência muda (em 127 V cai para cerca de 1/3), e o controle de temperatura se ajusta à tensão em uso. Nada aqui muda a ligação elétrica.</p>
+
+    <div class="field">
+      <span id="cSrcLbl">Tensão da rede</span>
+      <div id="cSrc" class="segs" role="radiogroup" aria-labelledby="cSrcLbl">
+        <button type="button" class="seg" role="radio" data-auto="1">Automática (sensor)</button>
+        <button type="button" class="seg" role="radio" data-auto="0">Manual</button>
+      </div>
+    </div>
+    <div class="field">
+      <span id="cVoltsLbl">Tensão manual: usada no modo Manual e quando o sensor não tiver leitura</span>
+      <div id="cVolts" class="segs" role="radiogroup" aria-labelledby="cVoltsLbl">
+        <button type="button" class="seg" role="radio" data-volts="127">127 V</button>
+        <button type="button" class="seg" role="radio" data-volts="220">220 V</button>
+      </div>
+    </div>
+    <p id="cHelp" class="whelp warn" hidden></p>
+    <button id="cSave" class="primary">Salvar</button>
+
+    <div id="cCalBox" class="field">
+      <span>Calibrar o sensor (uma vez, depois de ajustar o trimpot do ZMPT101B)</span>
+      <p class="whelp">Meça a tensão da tomada com um multímetro, em AC, e digite o valor.</p>
+      <div class="inrow"><input id="cCal" type="number" inputmode="decimal" min="90" max="260" step="0.1" placeholder="ex.: 219"><button id="cCalBtn" class="ghost" type="button">Calibrar</button></div>
+    </div>
+    <div id="cMsg" class="wmsg" hidden></div>
   </div>
 </div>
 
@@ -723,6 +763,7 @@ function renderControls(){
   const lock = running() || S.pending;
   document.querySelectorAll(".tab").forEach(b => b.disabled = lock);
   ["profileSel","stTemp","stTime","loadBtn","delBtn","newBtn"].forEach(id => $(id).disabled = lock);
+  if (!$("cfgModal").hidden) renderCfg();   // ciclo começou/terminou ou a conexão mudou
 }
 
 function renderProfileInfo(){
@@ -1190,8 +1231,102 @@ function handle(m){
     case "wifiScan":
       onWifiScan(m.nets || []);
       break;
+    case "config":
+      onConfig(m);
+      break;
   }
 }
+
+/* =====================================================================
+   CONFIGURAÇÕES AVANÇADAS (tensão da rede)
+   ===================================================================== */
+const VOLTS = [127, 220];
+// info: última mensagem "config" da placa; auto/volts: escolhidos e ainda não salvos
+const CFG = { info:null, auto:null, volts:null, poll:null };
+const cMsg = (html, kind) => { const el = $("cMsg"); el.innerHTML = html; el.className = "wmsg " + (kind||""); el.hidden = !html; };
+
+function sensorTxt(i){
+  if (!i.sensor) return "desativado no firmware";
+  if (i.vac != null) return `<b>${i.vac} V</b>` + (i.sat ? ' <span style="color:var(--warn)">(onda cortada: baixe o trimpot)</span>' : "");
+  if (!i.wave) return "sem leitura (confira o ZMPT101B)";
+  if (!i.cal) return "vendo a rede, falta calibrar";
+  return "leitura fora da faixa (recalibre)";
+}
+function renderCfg(){
+  const canTalk = !!S.link && (S.conn === "ok" || S.conn === "demo");
+  const lock = !canTalk || running(), i = CFG.info;
+  if (!i){
+    $("cStatus").textContent = canTalk ? "Consultando a placa…" : "Placa desconectada.";
+  } else {
+    $("cStatus").innerHTML =
+      `<div><span class="k">Em uso</span><b>${i.vuse} V</b> · ${i.src === "sensor" ? "medida pelo sensor" : "valor manual"}</div>` +
+      `<div><span class="k">Sensor</span>${sensorTxt(i)}</div>`;
+  }
+  const auto  = CFG.auto  ?? (i ? i.auto : null);
+  const volts = CFG.volts ?? (i ? i.volts : null);
+  document.querySelectorAll("#cSrc .seg").forEach(b => {
+    const on = auto != null && (b.dataset.auto === "1") === auto;
+    b.classList.toggle("active", on); b.setAttribute("aria-checked", on);
+    b.disabled = lock || !!(i && !i.sensor && b.dataset.auto === "1");
+  });
+  document.querySelectorAll("#cVolts .seg").forEach(b => {
+    const on = +b.dataset.volts === volts;
+    b.classList.toggle("active", on); b.setAttribute("aria-checked", on); b.disabled = lock;
+  });
+  // avisos: sensor sem leitura no modo automático; potência baixa perto de 127 V
+  let help = "";
+  if (auto && i && i.sensor && i.src !== "sensor")
+    help = `O sensor ainda não tem leitura válida, então vale a tensão manual (${volts} V). ` + (i.cal ? "" : "Calibre o sensor abaixo.");
+  else if ((i && i.vuse < 160) || (auto === false && volts === 127))
+    help = "Com 127 V, a placa de 220 V aquece com cerca de 1/3 da potência: fica bem mais lenta e pode não alcançar o pico das curvas de solda. Nesse caso ela para e avisa que a temperatura não sobe.";
+  $("cHelp").textContent = help; $("cHelp").hidden = !help;
+  const changed = !!i && (auto !== i.auto || volts !== i.volts);
+  $("cSave").disabled = lock || !changed;
+  $("cSave").textContent = running() ? "Espere o ciclo terminar" : (changed || !i ? "Salvar" : "Salvo");
+  $("cCalBox").hidden = !!(i && !i.sensor);
+  $("cCal").disabled = $("cCalBtn").disabled = lock || !(i && i.wave);
+}
+function onConfig(m){
+  CFG.info = m;
+  switch (m.event){
+    case "saved":      CFG.auto = CFG.volts = null; cMsg("<b>Salvo.</b>", "ok"); break;
+    case "calibrated": $("cCal").value = ""; cMsg(`<b>Sensor calibrado.</b> Leitura atual: ${m.vac ?? "--"} V.`, "ok"); break;
+    case "busy":
+    case "failed":     cMsg(esc(m.msg || "Não foi possível salvar."), "bad"); break;
+  }
+  renderCfg();
+}
+function closeCfg(){ $("cfgModal").hidden = true; clearInterval(CFG.poll); CFG.poll = null; }
+$("cfgBtn").addEventListener("click", () => {
+  CFG.auto = CFG.volts = null; cMsg(""); $("cfgModal").hidden = false; renderCfg();
+  const ask = () => { if (S.link) S.link.send({ cmd:"configStatus" }); };
+  ask(); clearInterval(CFG.poll); CFG.poll = setInterval(ask, 1500);   // leitura do sensor ao vivo
+});
+$("cClose").addEventListener("click", closeCfg);
+$("cfgModal").addEventListener("click", e => { if (e.target.id === "cfgModal") closeCfg(); });
+$("cSrc").addEventListener("click", e => {
+  const b = e.target.closest(".seg"); if (!b || b.disabled) return;
+  CFG.auto = b.dataset.auto === "1"; cMsg(""); renderCfg();
+});
+$("cVolts").addEventListener("click", e => {
+  const b = e.target.closest(".seg"); if (!b || b.disabled) return;
+  CFG.volts = +b.dataset.volts; cMsg(""); renderCfg();
+});
+$("cSave").addEventListener("click", () => {
+  const i = CFG.info;
+  if (!S.link || !i) return cMsg("Placa desconectada.", "bad");
+  if (running()) return cMsg("Espere o ciclo terminar para mudar as configurações.", "bad");
+  const volts = CFG.volts ?? i.volts, auto = CFG.auto ?? i.auto;
+  if (!VOLTS.includes(volts)) return cMsg("Escolha 127 V ou 220 V.", "bad");
+  S.link.send({ cmd:"configSet", volts, auto });
+});
+$("cCalBtn").addEventListener("click", () => {
+  const v = parseFloat(String($("cCal").value).replace(",", "."));
+  if (!S.link) return cMsg("Placa desconectada.", "bad");
+  if (running()) return cMsg("Espere o ciclo terminar para calibrar.", "bad");
+  if (!(v >= 90 && v <= 260)) return cMsg("Digite a tensão medida no multímetro (90 a 260 V).", "bad");
+  S.link.send({ cmd:"configSet", calib:v });
+});
 
 /* =====================================================================
    CONFIGURAÇÃO DE REDE (Wi-Fi híbrido)
@@ -1341,8 +1476,32 @@ function startSim(){
       }, 2500);
     } else if (o.cmd === "wifiForget"){
       simWifi.saved = ""; simWifi.sta = null; emit(wifi("forgotten"));
+    } else if (o.cmd === "configStatus"){
+      emit(simConfig());
+    } else if (o.cmd === "configSet"){
+      if (state === "running") return emit(simConfig("busy", "Espere o ciclo terminar para mudar as configurações."));
+      if (o.calib != null){
+        if (!(o.calib >= 90 && o.calib <= 260)) return emit(simConfig("failed", "Digite a tensão medida no multímetro (90 a 260 V)."));
+        simCfg.fator = o.calib / simRms(); return emit(simConfig("calibrated"));
+      }
+      if (![127, 220].includes(o.volts)) return emit(simConfig("failed", "Tensão inválida: escolha 127 V ou 220 V."));
+      simCfg.volts = o.volts; simCfg.auto = !!o.auto; emit(simConfig("saved"));
     }
   }};
+  // Rede simulada: 220 V (ou ?rede=127). O sensor lê ~3,1 contagens por volt.
+  const SIM_MAINS = +params.get("rede") || 220;
+  const simCfg = { volts:220, auto:true, fator:0 };
+  const simRms = () => (SIM_MAINS + (Math.random() - 0.5) * 2) * 3.1;
+  const simVac = () => simCfg.fator ? Math.round(simRms() * simCfg.fator) : null;
+  const simVuse = () => { const v = simVac(); return simCfg.auto && v != null ? v : simCfg.volts; };
+  const simConfig = (event, msg) => {
+    const vac = simVac(), useS = simCfg.auto && vac != null;
+    return { type:"config", event, msg, volts:simCfg.volts, auto:simCfg.auto, sensor:true, cal:!!simCfg.fator,
+             wave:true, sat:false, vac, vuse:useS ? vac : simCfg.volts, src:useS ? "sensor" : "manual" };
+  };
+  // a física usa a tensão REAL da rede; o controle usa a que ele acha que é
+  const pmax = () => PMAX * (SIM_MAINS / 220) ** 2;
+  const pmaxCtl = () => PMAX * (simVuse() / 220) ** 2;
   const simWifi = { saved:"", sta:null };
   const wifi = (event, msg) => ({ type:"wifi", event, msg, host:"reflow.local", saved:simWifi.saved,
                                   ap:{ ssid:"Reflow-Setup", ip:"192.168.4.1" }, sta:simWifi.sta });
@@ -1356,7 +1515,7 @@ function startSim(){
       if (state === "running"){
         sp = interp(prof.pts, t);
         const ahead = interp(prof.pts, t + TAU), slope = (interp(prof.pts, t + TAU + 1) - ahead);
-        const ff = (K * (ahead - TAMB) + slope) / PMAX;
+        const ff = (K * (ahead - TAMB) + slope) / pmaxCtl();
         const e = sp - plant.T;
         plant.i = clamp(plant.i + e * DT * 0.004, -0.25, 0.25);
         u = clamp(ff + 0.05 * e + plant.i, 0, 1);
@@ -1365,7 +1524,7 @@ function startSim(){
       }
       plant.u = u;
       plant.uf += (u - plant.uf) * DT / TAU;
-      plant.T += (PMAX * plant.uf - K * (plant.T - TAMB)) * DT;
+      plant.T += (pmax() * plant.uf - K * (plant.T - TAMB)) * DT;
     }
     const noise = (Math.random() - 0.5) * 0.5;
     emit({ type:"telemetry", state, t: state === "running" ? +t.toFixed(1) : null,
