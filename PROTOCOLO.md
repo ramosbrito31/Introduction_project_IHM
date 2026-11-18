@@ -44,7 +44,8 @@ Todas as mensagens são **JSON em texto**, uma por frame. A página reconecta so
 | `phase` | opcional | Nome da fase. Se ausente, a página deduz pela curva. |
 | `rate` | opcional | °C/s. Se ausente, a página calcula (janela de ~3 s). |
 | `msg` | em `error` | Motivo do erro, para quem abriu a página depois da falha. |
-| `vpp` | opcional | Amplitude bruta do sensor de tensão (contagens do ADC), para ajustar o ZMPT101B. A página ignora. |
+| `vac` | opcional | Tensão da rede medida pelo ZMPT101B (V). `null` sem sensor, sem calibração ou sem leitura válida. |
+| `vuse` | opcional | Tensão que o controle está considerando (V): a medida, ou a manual. |
 
 A página só plota pontos quando `state == "running"` e `t` cresce. Se `t` voltar para trás, entende como novo ciclo.
 Sem telemetria por 4 s → indicador "Sem dados".
@@ -106,6 +107,40 @@ ESP32 → página:
 ```json
 {"type":"wifiScan","nets":[{"ssid":"Casa","rssi":-52,"secure":true}]}
 ```
+
+## Configurações avançadas (tensão da rede)
+
+A resistência da placa é de 220 V. Em outra tensão a potência muda com o quadrado dela (em 127 V, cerca de 1/3), e o controle corrige o feed-forward pela tensão em uso, a cada segundo.
+
+- O ZMPT101B fica **na rede, antes do SSR**, e mede a tensão da tomada (valor eficaz). Para virar volts, é calibrado uma vez com um multímetro.
+- **Automática:** usa a tensão medida. Sem leitura válida (sem calibração, sensor solto, fora de 90–260 V), usa a manual.
+- **Manual:** 127 ou 220 V.
+- Tudo fica gravado na flash do ESP32 (padrão: automática, manual 220 V, sem calibração). `config` também é enviado em resposta ao `hello`. Mudar é recusado durante um ciclo.
+
+Página → ESP32:
+| Comando | Exemplo | Resposta |
+|---|---|---|
+| `configStatus` | `{"cmd":"configStatus"}` | `config` |
+| `configSet` | `{"cmd":"configSet","volts":127,"auto":false}` | `config` com `event: saved` |
+| `configSet` (calibrar) | `{"cmd":"configSet","calib":219.5}` | `config` com `event: calibrated` |
+
+Recusas vêm como `config` com `event: busy` (ciclo em andamento) ou `failed` (valor inválido, sensor sem leitura ou com a onda cortada), com `msg`.
+
+ESP32 → página:
+```json
+{"type":"config","event":"saved","volts":220,"auto":true,"sensor":true,"cal":true,
+ "wave":true,"sat":false,"vac":218,"vuse":218,"src":"sensor"}
+```
+| Campo | Descrição |
+|---|---|
+| `volts` | Tensão manual (127 ou 220). |
+| `auto` | Modo automático ligado. |
+| `sensor` | Sensor habilitado no firmware (`USAR_SENSOR_TENSAO`). |
+| `cal` | Sensor calibrado. |
+| `wave` | O sensor está vendo a onda da rede (dá para calibrar). |
+| `sat` | A onda bate no limite do ADC: baixar o trimpot. |
+| `vac` | Tensão medida (V), ou `null`. |
+| `vuse` / `src` | Tensão em uso pelo controle e de onde vem: `sensor` ou `manual`. |
 
 ## Regras do lado da página
 - Superfície quente: badge pulsante quando `temp ≥ 50 °C` (constante `HOT_C`).

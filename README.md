@@ -17,7 +17,7 @@ O site escolhe a curva de temperatura, o ESP32 lê o termopar e aciona a resist�
 | ESP32 LOLIN32 | Controle e site |
 | Módulo MAX6675 + termopar tipo K | Temperatura da placa |
 | SSR Fotek SSR-40DA (entrada 3–32 V DC) | Liga e desliga a placa |
-| Módulo ZMPT101B | Confere se há tensão na placa |
+| Módulo ZMPT101B | Mede a tensão da rede, para o controle se ajustar a ela |
 | Fonte HLK-PM12 (12 V, 3 W) | Alimenta a parte de baixa tensão |
 | Fusível de vidro 5x20 de 6 A + porta-fusível | Protege contra curto-circuito |
 | Placa de aquecimento LJXH 10x15 cm, 220 V | Aquecimento |
@@ -36,12 +36,19 @@ O site escolhe a curva de temperatura, o ESP32 lê o termopar e aciona a resist�
 
 **Antes de energizar, confirme a tensão da sua tomada:** com uma placa de 220 V em 127 V, a potência cai para cerca de um terço.
 
+O firmware se ajusta à tensão da rede, medida pelo ZMPT101B. Isso fica no botão de engrenagem do site (**Configurações avançadas**):
+
+- **Automática (sensor):** usa a tensão medida, depois de calibrar o sensor (ver [Ajuste do ZMPT101B](#ajuste-do-zmpt101b)). É o padrão.
+- **Manual:** 127 V ou 220 V (padrão). Vale também no modo automático enquanto o sensor não tiver leitura válida (sem calibração, solto ou fora de 90 a 260 V).
+
+Nada disso muda a ligação elétrica. A tensão em uso corrige o `pMax` do controle pelo quadrado da tensão, a cada segundo, inclusive durante o ciclo.
+
 ### Rede elétrica
 
 ```
-Fase ──[fusível 6 A]──[termostato/fusível térmico]──[SSR 1 → 2]──┬── placa ──┬── Neutro
-                                                                 └── ZMPT ───┘
-Fase ──[fusível 1 A]── HLK-PM12 ── Neutro
+Fase ──[fusível 6 A]──[termostato/fusível térmico]──[SSR 1 → 2]── placa ── Neutro
+Fase ──[fusível 1 A]──┬── HLK-PM12 ──┬── Neutro
+                      └──── ZMPT ────┘
 Terra ── carcaça metálica da placa
 ```
 
@@ -84,15 +91,16 @@ Não encontrei a ficha da LJXH, então leia a potência na etiqueta ou meça a r
 
 ### Ajuste do ZMPT101B
 
-Alimentar com 3,3 V mantém a saída dentro do limite do ADC do ESP32. Com a placa conectada:
+O módulo fica ligado na rede, antes do SSR (no mesmo ramal da HLK-PM12), e mede a tensão da tomada. Alimentar com 3,3 V mantém a saída dentro do limite do ADC do ESP32.
 
-1. Rode um ciclo curto e abra o monitor serial. O campo `vpp` da telemetria mostra a amplitude medida.
-2. Ajuste o trimpot até `vpp` ficar entre 1500 e 2500 com a placa energizada, sem deformar a onda.
-3. Com o SSR desligado, `vpp` precisa ficar bem abaixo de 400 (`LIMIAR` em `lib/Controle/Controle.h`).
+1. Ligue tudo na tomada e abra **Configurações avançadas** no site. A linha **Sensor** mostra a leitura ao vivo.
+2. Se aparecer **onda cortada**, gire o trimpot para baixar até o aviso sumir. Se a sua rede pode ser 127 ou 220 V, ajuste na maior.
+3. Meça a tomada com um multímetro em AC, digite o valor em **Calibrar o sensor** e clique em **Calibrar**. O fator fica gravado no ESP32.
+4. Se mexer no trimpot depois, calibre de novo.
 
 **Se o módulo não funcionar com 3,3 V:** alguns não funcionam. Alimente com 5 V e reduza a saída com um divisor resistivo antes do GPIO 34, porque o ESP32 não aceita mais de 3,3 V.
 
-**Se ainda não instalou o módulo:** use `USAR_SENSOR_TENSAO = false` em `src/main.cpp`. Não energize com a placa desconectada: a fuga do SSR desligado pode parecer tensão para o ZMPT e gerar um alarme falso de curto.
+**Se ainda não instalou o módulo:** não precisa mudar nada. Sem leitura, o firmware usa a tensão manual. Para esconder o sensor no site, use `USAR_SENSOR_TENSAO = false` em `src/main.cpp`.
 
 ### Segurança
 
@@ -118,9 +126,7 @@ Todas desligam a resistência e mostram o motivo no site.
 | Termopar solto ou com defeito | 1 s de leituras inválidas, com ou sem ciclo |
 | Temperatura excessiva | 315 °C, com ou sem ciclo |
 | Temperatura não sobe | Potência ≥ 60%, mais de 5 °C abaixo do alvo e menos de 5 °C de subida em 60 s |
-| Tensão na placa com o SSR desligado | Cerca de 0,5 s (ZMPT101B). Só sai reiniciando a placa |
-| Esquenta com a resistência desligada | Sobe 20 °C acima do mínimo, depois de 30 s desligada. Vale mesmo sem o ZMPT101B. Só sai reiniciando a placa |
-| SSR ligado, mas sem tensão na placa | Cerca de 0,5 s em potência alta (fusível queimado, SSR aberto ou falta de rede) |
+| Esquenta com a resistência desligada (SSR em curto) | Sobe 20 °C acima do mínimo, depois de 30 s desligada. Só sai reiniciando a placa |
 | Firmware travado | 5 s sem o loop rodar: o ESP32 reinicia e o SSR desliga |
 
 Depois de um erro, a placa aceita um novo ciclo assim que o problema for resolvido. Queda de Wi-Fi não interrompe o ciclo: o botão **Parar** depende da conexão, então mantenha acesso físico à tomada.
@@ -138,7 +144,7 @@ A cada 250 ms o firmware lê o termopar e calcula a potência:
 
 Os valores de fábrica em `src/main.cpp` (`PARAM_CONTROLE`) são estimativas, porque ainda não foram medidos em uma placa real. **Calibre antes de soldar qualquer coisa**, começando com a placa vazia e vigiada:
 
-1. **`pMax` e `atraso`:** no modo Estático, peça 300 °C e clique em **Parar** ao chegar a uns 150 °C. No CSV baixado, olhe o começo da subida: `pMax = subida em °C/s ÷ (duty ÷ 100)`, e `atraso` é o tempo entre a potência subir e a temperatura começar a reagir.
+1. **`pMax` e `atraso`:** no modo Estático, peça 300 °C e clique em **Parar** ao chegar a uns 150 °C. No CSV baixado, olhe o começo da subida: `pMax = subida em °C/s ÷ (duty ÷ 100)`, e `atraso` é o tempo entre a potência subir e a temperatura começar a reagir. O `pMax` em `src/main.cpp` é o valor **em 220 V**: se calibrar em 127 V, multiplique o que medir por 3.
 2. **`perda`:** continue registrando o resfriamento em uma curva terminada em descida. Entre dois instantes, `perda = (queda em °C/s) / (temperatura − ambiente)`.
 3. **`kp` e `ki`:** só mexa se precisar. Se oscilar, reduza `kp` pela metade. Se ficar sempre um pouco abaixo ou acima do alvo, aumente `ki`.
 

@@ -36,12 +36,12 @@ const int PINO_SSR = 26;   // entrada + do SSR (nível alto liga)
 const int PINO_SCK = 18;   // MAX6675 SCK
 const int PINO_SO  = 19;   // MAX6675 SO
 const int PINO_CS  = 23;   // MAX6675 CS
-const int PINO_ZMPT = 34;  // ZMPT101B OUT (precisa ser ADC1: o ADC2 não funciona com Wi-Fi)
-const bool USAR_SENSOR_TENSAO = true;  // false enquanto o ZMPT101B não estiver ligado
+const int PINO_ZMPT = 34;  // ZMPT101B OUT, ligado na REDE (antes do SSR). Precisa ser ADC1: o ADC2 não funciona com Wi-Fi
+const bool USAR_SENSOR_TENSAO = true;  // false se o ZMPT101B não estiver instalado (aí vale só a tensão manual)
 
 // ---- modelo da placa: CALIBRE com a sua placa (ver README.md) ----
 const ParamControle PARAM_CONTROLE = {
-  3.2f,    // pMax   °C/s com 100% de potência
+  3.2f,    // pMax   °C/s com 100% de potência, EM 220 V (o firmware corrige pela tensão da rede)
   0.008f,  // perda  1/s
   25.0f,   // tAmb   °C
   5.0f,    // atraso s
@@ -62,6 +62,10 @@ const char* AP_SENHA = "reflowpoli";     // TROQUE (mínimo 8 caracteres)
 const char* HOSTNAME = "reflow";         // => http://reflow.local
 
 String redeSalva, senhaSalva;            // rede de casa (gravada na flash)
+// ---- tensão da rede (configurações avançadas, gravadas na flash) ----
+int    tensaoManual = TENSAO_PADRAO;     // 127 ou 220 V: usada sem sensor ou sem leitura válida
+bool   tensaoAuto   = true;              // usar a tensão medida pelo ZMPT101B
+float  fatorCal     = 0;                 // V por contagem eficaz do ADC; 0 = sensor não calibrado
 
 // ------------------------------------------------------------------
 // Estado do sistema (é isto que vai para o site)
@@ -85,9 +89,12 @@ Controlador      controlador(PARAM_CONTROLE);
 JanelaSSR        janelaSSR;
 LeituraSensor    sensor;
 MonitorSeguranca monitor;
-MonitorTensao    monitorTensao;
+MedidorRede      medidorRede;
 Falha            falhaAtual = FALHA_NENHUMA;
 bool             ssrPreso = false;   // só sai reiniciando a placa
+
+float tensaoMedida();   // (definidas em CONFIGURAÇÕES AVANÇADAS)
+float tensaoEmUso();
 
 const char* nomeEstado() {
   switch (estado) {
@@ -116,7 +123,9 @@ void enviarTelemetria() {
   if (sensor.ok()) doc["temp"] = tempAtual;
   else             doc["temp"] = nullptr;
   doc["duty"]  = roundf(duty);
-  if (USAR_SENSOR_TENSAO) doc["vpp"] = monitorTensao.amplitude();   // para ajustar o ZMPT101B
+  float vm = tensaoMedida();                 // tensão da rede pelo sensor (null se não houver)
+  if (isnan(vm)) doc["vac"] = nullptr; else doc["vac"] = roundf(vm);
+  doc["vuse"] = roundf(tensaoEmUso());      // tensão que o controle está considerando
   if (estado == EST_RUNNING) {
     doc["t"]      = tCurva;
     doc["target"] = alvo;
@@ -307,6 +316,84 @@ void tratarWiFi() {
 }
 
 // ------------------------------------------------------------------
+// CONFIGURAÇÕES AVANÇADAS (tensão da rede)
+// ------------------------------------------------------------------
+// Tensão medida pelo sensor, em volts. NAN se não houver (sem sensor, sem
+// calibração, sem onda ou fora da faixa plausível).
+float tensaoMedida() {
+  if (!USAR_SENSOR_TENSAO || fatorCal <= 0 || !medidorRede.temLeitura()) return NAN;
+  float v = medidorRede.rmsContagens() * fatorCal;
+  return (v >= TENSAO_MIN && v <= TENSAO_MAX) ? v : NAN;
+}
+bool  usandoSensor() { return tensaoAuto && !isnan(tensaoMedida()); }
+float tensaoEmUso()  { return usandoSensor() ? tensaoMedida() : (float)tensaoManual; }
+
+// O controle acompanha a tensão em uso (chamado a cada segundo, inclusive no ciclo)
+void aplicarTensao() {
+  controlador.definirParametros(paramParaTensao(PARAM_CONTROLE, tensaoEmUso()));
+}
+
+void carregarConfig() {
+  prefs.begin("config", true);
+  int v      = prefs.getInt("volts", TENSAO_PADRAO);
+  tensaoAuto = prefs.getBool("auto", true);
+  fatorCal   = prefs.getFloat("fator", 0);
+  prefs.end();
+  tensaoManual = tensaoValida(v) ? v : TENSAO_PADRAO;
+  if (!(fatorCal > 0 && fatorCal < 10)) fatorCal = 0;
+  aplicarTensao();
+  Serial.printf("# Tensao manual: %d V  automatico: %s  sensor calibrado: %s\n",
+                tensaoManual, tensaoAuto ? "sim" : "nao", fatorCal > 0 ? "sim" : "nao");
+}
+
+void enviarConfig(const char* evento = nullptr, const char* msg = nullptr) {
+  JsonDocument doc;
+  doc["type"]   = "config";
+  if (evento) doc["event"] = evento;
+  if (msg)    doc["msg"]   = msg;
+  doc["volts"]  = tensaoManual;
+  doc["auto"]   = tensaoAuto;
+  doc["sensor"] = USAR_SENSOR_TENSAO;
+  doc["cal"]    = fatorCal > 0;
+  doc["wave"]   = USAR_SENSOR_TENSAO && medidorRede.temLeitura();   // o sensor vê a onda da rede?
+  doc["sat"]    = USAR_SENSOR_TENSAO && medidorRede.saturado();
+  float vm = tensaoMedida();
+  if (isnan(vm)) doc["vac"] = nullptr; else doc["vac"] = roundf(vm);
+  doc["vuse"]   = roundf(tensaoEmUso());
+  doc["src"]    = usandoSensor() ? "sensor" : "manual";
+  enviar(doc);
+}
+
+void salvarConfig(JsonDocument& doc) {
+  if (estado == EST_RUNNING) return enviarConfig("busy", "Espere o ciclo terminar para mudar as configurações.");
+
+  // calibração: o usuário mediu a tomada com um multímetro e digitou o valor
+  if (!doc["calib"].isNull()) {
+    float v = doc["calib"] | 0.0f;
+    if (!USAR_SENSOR_TENSAO)             return enviarConfig("failed", "O sensor de tensão está desativado no firmware.");
+    if (!(v >= TENSAO_MIN && v <= TENSAO_MAX)) return enviarConfig("failed", "Digite a tensão medida no multímetro (90 a 260 V).");
+    if (!medidorRede.temLeitura())       return enviarConfig("failed", "O sensor não está vendo a rede: confira as ligações do ZMPT101B.");
+    if (medidorRede.saturado())          return enviarConfig("failed", "A onda está cortada no limite do ESP32: gire o trimpot do ZMPT101B para baixar e tente de novo.");
+    fatorCal = v / medidorRede.rmsContagens();
+    prefs.begin("config", false); prefs.putFloat("fator", fatorCal); prefs.end();
+    aplicarTensao();
+    return enviarConfig("calibrated");
+  }
+
+  int  v    = doc["volts"] | tensaoManual;
+  bool auto_ = doc["auto"] | tensaoAuto;
+  if (!tensaoValida(v)) return enviarConfig("failed", "Tensão inválida: escolha 127 V ou 220 V.");
+  tensaoManual = v;
+  tensaoAuto   = auto_;
+  prefs.begin("config", false);
+  prefs.putInt("volts", tensaoManual);
+  prefs.putBool("auto", tensaoAuto);
+  prefs.end();
+  aplicarTensao();
+  enviarConfig("saved");
+}
+
+// ------------------------------------------------------------------
 // RECEBIMENTO: site -> ESP32 (mesma função para Wi-Fi e USB)
 // ------------------------------------------------------------------
 void iniciarCiclo(JsonDocument& doc) {
@@ -343,7 +430,6 @@ void iniciarCiclo(JsonDocument& doc) {
   alvo = interpolar(curva, nPontos, 0);
   controlador.reiniciar();
   monitor.reiniciar();
-  monitorTensao.reiniciar();
   falhaAtual = FALHA_NENHUMA;
   enviarPerfil();
   mudarEstado(EST_RUNNING);     // a página espera isto em até 4 s
@@ -355,7 +441,14 @@ void processarComando(JsonDocument& doc) {
   if (strcmp(cmd, "hello") == 0) {
     enviarEstado();
     enviarWifi();
+    enviarConfig();
     if (estado == EST_RUNNING) enviarPerfil();
+  }
+  else if (strcmp(cmd, "configStatus") == 0) {
+    enviarConfig();
+  }
+  else if (strcmp(cmd, "configSet") == 0) {
+    salvarConfig(doc);
   }
   else if (strcmp(cmd, "wifiStatus") == 0) {
     enviarWifi();
@@ -458,7 +551,6 @@ void controlar(float dt) {
 
   // roda em qualquer estado: sensor solto ou SSR em curto também importam fora do ciclo
   Falha f = monitor.verificar(millis(), sensor.ok(), tempAtual, duty, estado == EST_RUNNING ? alvo : 0);
-  if (f == FALHA_NENHUMA && USAR_SENSOR_TENSAO) f = monitorTensao.falha();
   if (f != FALHA_NENHUMA) entrarEmFalha(f);
 }
 
@@ -487,13 +579,15 @@ void setup() {
   Serial.setRxBufferSize(2048);   // o comando "start" com a curva pode passar de 256 bytes
   Serial.begin(115200);
   LittleFS.begin(true);
+  carregarConfig();  // tensão da rede salva (127/220 V)
 
   iniciarWiFi();   // rede de casa se configurada; senão rede própria "Reflow-Setup"
 
   filaComandos = xQueueCreate(8, sizeof(char*));
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
-  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html"); // serve index.html.gz automaticamente
+  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html")  // serve index.html.gz automaticamente
+        .setCacheControl("no-cache");   // o navegador sempre busca a página de novo: depois de gravar o site, a versão nova aparece
   server.begin();
   iniciarWatchdog();
 }
@@ -518,8 +612,10 @@ void loop() {
   static uint32_t ultimaAmostra = 0;
   if (USAR_SENSOR_TENSAO && millis() != ultimaAmostra) {
     ultimaAmostra = millis();
-    monitorTensao.amostra(ultimaAmostra, analogRead(PINO_ZMPT), ssrLigado);
+    medidorRede.amostra(ultimaAmostra, analogRead(PINO_ZMPT));
   }
+  static uint32_t ultimaTensao = 0;
+  if (millis() - ultimaTensao >= 1000) { ultimaTensao = millis(); aplicarTensao(); }
 
   if (millis() - ultimaTelemetria >= 250) { ultimaTelemetria = millis(); enviarTelemetria(); }
 

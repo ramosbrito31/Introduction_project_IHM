@@ -220,58 +220,39 @@ void test_resfriamento_normal_nao_gera_alarme_falso() {
   }
 }
 
-// ---------- sensor de tensão ----------
-// Simula a saída do ZMPT101B a cada 1 ms, com ruído do ADC, por 'segundos'.
-// tensaoNaPlaca recebe o estado pedido ao SSR e devolve se há tensão de verdade.
-template <typename F>
-static Falha simulaTensao(float duty, float segundos, F tensaoNaPlaca, float hz = 60, float* tFalha = nullptr) {
-  MonitorTensao mt; JanelaSSR ssr;
-  bool ligadoReal = false;
-  for (uint32_t ms = 1000; ms < 1000 + (uint32_t)(segundos * 1000); ms++) {
-    bool pedido = ssr.atualizar(ms, duty);
-    float s = (float)ms / 1000.0f;
-    float onda = sinf(2 * (float)M_PI * hz * s);
-    if (fabsf(onda) < 0.1f) ligadoReal = pedido;      // zero-cross: só muda perto do zero
-    float v = tensaoNaPlaca(ligadoReal) ? 1000.0f * onda : 0.0f;
-    mt.amostra(ms, (int)(2048 + v + rand() % 120 - 60), pedido);
-    if (mt.falha() != FALHA_NENHUMA) {
-      if (tFalha) *tFalha = (ms - 1000) / 1000.0f;
-      return mt.falha();
-    }
+// ---------- sensor de tensão (ZMPT101B na rede) ----------
+// Alimenta o medidor por 'segundos' com uma senoide de 'pico' contagens em volta
+// de 'centro', com ruído do ADC, a 1 amostra por ms.
+static MedidorRede simulaRede(float pico, float segundos, float hz = 60, int centro = 1900) {
+  MedidorRede m;
+  for (uint32_t ms = 0; ms < (uint32_t)(segundos * 1000); ms++) {
+    float onda = sinf(2 * (float)M_PI * hz * ms / 1000.0f);
+    int adc = (int)(centro + pico * onda + rand() % 21 - 10);
+    m.amostra(ms, adc < 0 ? 0 : (adc > 4095 ? 4095 : adc));
   }
-  return FALHA_NENHUMA;
+  return m;
 }
-static bool ssrNormal(bool ligado) { return ligado; }
-static bool ssrEmCurto(bool) { return true; }
-static bool semRede(bool) { return false; }
-
-void test_tensao_ssr_normal_nao_gera_alarme_em_nenhuma_potencia() {
-  float duties[] = {0, 5, 15, 30, 50, 75, 95, 100};
-  for (float d : duties) {
-    TEST_ASSERT_EQUAL(FALHA_NENHUMA, simulaTensao(d, 60, ssrNormal, 60));
-    TEST_ASSERT_EQUAL(FALHA_NENHUMA, simulaTensao(d, 60, ssrNormal, 50));
-  }
+void test_rede_mede_o_valor_eficaz() {
+  // senoide: eficaz = pico / raiz(2)
+  MedidorRede m60 = simulaRede(1000, 3, 60);
+  TEST_ASSERT_TRUE(m60.temLeitura());
+  TEST_ASSERT_FLOAT_WITHIN(15, 707, m60.rmsContagens());
+  MedidorRede m50 = simulaRede(1000, 3, 50);
+  TEST_ASSERT_FLOAT_WITHIN(15, 707, m50.rmsContagens());
+  TEST_ASSERT_FALSE(m60.saturado());
 }
-void test_tensao_detecta_ssr_em_curto_em_menos_de_um_segundo() {
-  float t = -1;
-  TEST_ASSERT_EQUAL(FALHA_SSR_PRESO, simulaTensao(0, 5, ssrEmCurto, 60, &t));
-  TEST_ASSERT_LESS_THAN_FLOAT(1.0f, t);
+void test_rede_127_e_220_ficam_na_proporcao_certa() {
+  // com o mesmo ajuste do trimpot, a leitura é proporcional à tensão
+  MedidorRede a = simulaRede(1200, 3), b = simulaRede(1200 * 127.0f / 220.0f, 3);
+  TEST_ASSERT_FLOAT_WITHIN(0.02f, 127.0f / 220.0f, b.rmsContagens() / a.rmsContagens());
 }
-void test_tensao_detecta_ssr_em_curto_durante_o_ciclo() {
-  TEST_ASSERT_EQUAL(FALHA_SSR_PRESO, simulaTensao(50, 10, ssrEmCurto));
+void test_rede_sem_onda_nao_tem_leitura() {
+  TEST_ASSERT_FALSE(simulaRede(0, 3).temLeitura());     // só ruído: sensor solto ou sem rede
+  MedidorRede nada;
+  TEST_ASSERT_FALSE(nada.temLeitura());                 // nenhuma amostra ainda
 }
-void test_tensao_detecta_falta_de_tensao() {
-  float t = -1;
-  TEST_ASSERT_EQUAL(FALHA_SEM_TENSAO, simulaTensao(100, 5, semRede, 60, &t));
-  TEST_ASSERT_LESS_THAN_FLOAT(1.0f, t);
-  TEST_ASSERT_EQUAL(FALHA_SEM_TENSAO, simulaTensao(30, 10, semRede));   // só com pulsos
-}
-void test_tensao_reiniciar_limpa_a_falha() {
-  MonitorTensao mt; uint32_t ms = 0;
-  for (; ms < 2000; ms++) mt.amostra(ms, 2048, true);
-  TEST_ASSERT_EQUAL(FALHA_SEM_TENSAO, mt.falha());
-  mt.reiniciar();
-  TEST_ASSERT_EQUAL(FALHA_NENHUMA, mt.falha());
+void test_rede_avisa_saturacao() {
+  TEST_ASSERT_TRUE(simulaRede(2500, 3).saturado());     // trimpot alto demais
 }
 
 // ---------- SSR ----------
@@ -326,8 +307,41 @@ void test_decodificar_max6675() {
   TEST_ASSERT_FALSE(decodificarMax6675(0xFFFF, T));
 }
 
+void test_tensao_da_rede_ajusta_a_potencia() {
+  TEST_ASSERT_TRUE(tensaoValida(127));
+  TEST_ASSERT_TRUE(tensaoValida(220));
+  TEST_ASSERT_FALSE(tensaoValida(110));
+  TEST_ASSERT_FALSE(tensaoValida(0));
+  TEST_ASSERT_EQUAL_FLOAT(PARAM.pMax, paramParaTensao(PARAM, 220).pMax);
+  // 220 V em 127 V: (127/220)² ≈ 0,333 da potência
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, PARAM.pMax * 0.333f, paramParaTensao(PARAM, 127).pMax);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, PARAM.pMax * 0.9f, paramParaTensao(PARAM, 208.7f).pMax);  // medida
+  TEST_ASSERT_EQUAL_FLOAT(PARAM.pMax, paramParaTensao(PARAM, 999).pMax);   // inválida: não mexe
+  TEST_ASSERT_EQUAL_FLOAT(PARAM.pMax, paramParaTensao(PARAM, 0).pMax);
+  TEST_ASSERT_EQUAL_FLOAT(PARAM.perda, paramParaTensao(PARAM, 127).perda); // o resto não muda
+}
+void test_placa_220v_em_127v_segue_curva_baixa() {
+  // Planta com 1/3 da potência e o controle informado da tensão
+  Planta fraca = { PARAM.pMax * 0.333f, PARAM.perda, PARAM.atraso };
+  Ponto baixa[] = {{0,25,""},{200,100,""},{500,100,""}};
+  Controlador ctl(paramParaTensao(PARAM, 127));
+  JanelaSSR ssr;
+  float duty = 0, t = 0, erroMax = 0;
+  for (int k = 0; t < 500; k++) {
+    if (k % 25 == 0) {
+      t += 0.25f * velocidadeCurva(baixa, 3, t, fraca.T);
+      duty = ctl.calcular(baixa, 3, t, fraca.T, 0.25f);
+      if (t > 250) erroMax = fmaxf(erroMax, fabsf(interpolar(baixa, 3, t) - fraca.T));
+    }
+    fraca.passo(ssr.atualizar((uint32_t)(k * 10), duty), 0.01f);
+  }
+  TEST_ASSERT_LESS_THAN_FLOAT(3.0f, erroMax);   // patamar a 100 °C, dentro de 3 °C
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_tensao_da_rede_ajusta_a_potencia);
+  RUN_TEST(test_placa_220v_em_127v_segue_curva_baixa);
   RUN_TEST(test_placa_conforme_o_modelo);
   RUN_TEST(test_placa_mais_fraca_que_o_modelo);
   RUN_TEST(test_placa_que_nao_alcanca_o_pico_gera_falha);
@@ -343,11 +357,10 @@ int main() {
   RUN_TEST(test_sobretemperatura_corta_mesmo_ocioso);
   RUN_TEST(test_ssr_em_curto_gera_falha_ocioso);
   RUN_TEST(test_resfriamento_normal_nao_gera_alarme_falso);
-  RUN_TEST(test_tensao_ssr_normal_nao_gera_alarme_em_nenhuma_potencia);
-  RUN_TEST(test_tensao_detecta_ssr_em_curto_em_menos_de_um_segundo);
-  RUN_TEST(test_tensao_detecta_ssr_em_curto_durante_o_ciclo);
-  RUN_TEST(test_tensao_detecta_falta_de_tensao);
-  RUN_TEST(test_tensao_reiniciar_limpa_a_falha);
+  RUN_TEST(test_rede_mede_o_valor_eficaz);
+  RUN_TEST(test_rede_127_e_220_ficam_na_proporcao_certa);
+  RUN_TEST(test_rede_sem_onda_nao_tem_leitura);
+  RUN_TEST(test_rede_avisa_saturacao);
   RUN_TEST(test_janela_entrega_a_potencia_pedida);
   RUN_TEST(test_janela_funciona_quando_millis_da_a_volta);
   RUN_TEST(test_potencia_zero_desliga_no_meio_da_janela);
