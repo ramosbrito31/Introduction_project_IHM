@@ -38,19 +38,27 @@ const int PINO_SO  = 19;   // MAX6675 SO
 const int PINO_CS  = 23;   // MAX6675 CS
 const int PINO_ZMPT = 34;  // ZMPT101B OUT, ligado na REDE (antes do SSR). Precisa ser ADC1: o ADC2 não funciona com Wi-Fi
 const bool USAR_SENSOR_TENSAO = true;  // false se o ZMPT101B não estiver instalado (aí vale só a tensão manual)
+const int PINO_LED_QUENTE = 32;  // LED 1 (vermelho): aceso com a superfície quente
+const int PINO_LED_STATUS = 33;  // LED 2: pisca ao ligar até um aparelho se conectar pelo Wi-Fi; depois fica aceso
+const int PINO_SOM        = 25;  // speaker, pelo transistor BC337
+
+// ---- avisos ----
+const float    TEMP_QUENTE       = 50.0f;  // °C: superfície quente (mesmo limite do aviso do site)
+const float    HISTERESE_QUENTE  = 5.0f;   // °C: só deixa de ser quente abaixo de 45 °C (sem piscar no limite)
+const uint32_t INTERVALO_APITO_MS = 3000;  // com a superfície quente, um apito a cada 3 s
 
 // ---- modelo da placa: CALIBRE com a sua placa (ver README.md) ----
 const ParamControle PARAM_CONTROLE = {
-  3.2f,    // pMax   °C/s com 100% de potência, EM 220 V (o firmware corrige pela tensão da rede)
-  0.008f,  // perda  1/s
-  25.0f,   // tAmb   °C
-  5.0f,    // atraso s
-  5.0f,    // kp     %/°C
-  0.4f,    // ki     %/(°C·s)
-  25.0f,   // iMax   %
-  1.0f,    // margem °C acima da curva que o freio preditivo tolera (negativo = sem freio)
-  15.0f,   // bandaI °C: a integral só acumula perto da curva
-  4.0f,    // folga  °C de atraso tolerado antes de a curva esperar a placa
+  11.6f,      // pMax   °C/s com 100% de potência, EM 220 V (o firmware corrige pela tensão da rede)
+  0.004234f,  // perda  1/s
+  40.0f,      // tAmb   °C
+  25.93f,     // atraso s
+  3.026f,     // kp     %/°C
+  0.4062f,    // ki     %/(°C·s)
+  24.23f,     // iMax   %
+  0.0f,       // margem °C acima da curva que o freio preditivo tolera (negativo = sem freio)
+  18.23f,     // bandaI °C: a integral só acumula perto da curva
+  3.304f,     // folga  °C de atraso tolerado antes de a curva esperar a placa
 };
 // Os parâmetros em uso podem ser trocados pela bancada de testes (comando "params")
 // e gravados na flash; PARAM_CONTROLE é o padrão de fábrica.
@@ -88,6 +96,7 @@ bool     cortadoAberta = false;
 enum Estado { EST_IDLE, EST_RUNNING, EST_DONE, EST_STOPPED, EST_ERR };
 Estado   estado = EST_IDLE;
 char     msgErro[96] = "";
+bool     somFimPendente = false;   // o ciclo terminou: tocar os 3 apitos (no loop)
 
 float    tCurva = 0;        // s: relógio da curva (pode andar devagar se a placa atrasar)
 float    tempAtual = 0;     // °C medida
@@ -179,6 +188,7 @@ void enviarPerfil() {   // eco da curva que o controle está seguindo
 }
 
 void mudarEstado(Estado novo) {
+  if (novo == EST_DONE && estado == EST_RUNNING) somFimPendente = true;
   estado = novo;
   enviarEstado();
 }
@@ -230,7 +240,10 @@ void iniciarWiFi() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(redeSalva.c_str(), senhaSalva.c_str());
     uint32_t t0 = millis();
-    while (!staLigado() && millis() - t0 < 15000) delay(200);
+    while (!staLigado() && millis() - t0 < 15000) {
+      digitalWrite(PINO_LED_STATUS, (millis() / 500) % 2);   // continua piscando enquanto tenta
+      delay(100);
+    }
   }
   if (staLigado()) Serial.printf("# Conectado a %s  ip %s\n", redeSalva.c_str(), WiFi.localIP().toString().c_str());
   else             ligarAP();             // 2. fallback: rede própria
@@ -656,12 +669,75 @@ void iniciarWatchdog() {
 }
 
 // ------------------------------------------------------------------
+// LEDs e speaker
+// ------------------------------------------------------------------
+// O som é tocado sem travar o loop: uma sequência de notas avança a cada volta.
+struct Nota { uint16_t freq; uint16_t ms; };   // freq 0 = silêncio
+const Nota SOM_LIGOU[]  = {{1047, 110}, {0, 40}, {1319, 110}, {0, 40}, {1568, 220}};
+const Nota SOM_QUENTE[] = {{2500, 120}};
+const Nota SOM_FIM[]    = {{2000, 80}, {0, 70}, {2000, 80}, {0, 70}, {2000, 80}};   // ciclo concluído
+#define NNOTAS(s) ((int)(sizeof(s) / sizeof(s[0])))
+
+const Nota* somAtual = nullptr;
+int         somN = 0, somI = 0;
+uint32_t    somDesde = 0;
+bool        superficieQuente = false;
+
+void iniciarNota() {
+  if (somAtual[somI].freq) tone(PINO_SOM, somAtual[somI].freq);
+  else                     noTone(PINO_SOM);
+}
+
+void tocar(const Nota* s, int n) {
+  somAtual = s; somN = n; somI = 0; somDesde = millis();
+  iniciarNota();
+}
+
+void atualizarSom() {
+  if (!somAtual || millis() - somDesde < somAtual[somI].ms) return;
+  somDesde = millis();
+  if (++somI >= somN) { noTone(PINO_SOM); somAtual = nullptr; }
+  else iniciarNota();
+}
+
+void atualizarAvisos() {
+  // Superfície quente, com histerese. Sensor com defeito conta como quente: não dá
+  // para garantir que esfriou (os 2 s iniciais são o tempo da primeira leitura).
+  if (!sensor.ok())                                     superficieQuente = millis() > 2000;
+  else if (tempAtual >= TEMP_QUENTE)                    superficieQuente = true;
+  else if (tempAtual < TEMP_QUENTE - HISTERESE_QUENTE)  superficieQuente = false;
+  digitalWrite(PINO_LED_QUENTE, superficieQuente ? HIGH : LOW);
+
+  // Status: pisca até haver um aparelho conectado pelo Wi-Fi (site ou bancada aberta)
+  bool conectado = ws.count() > 0;
+  digitalWrite(PINO_LED_STATUS, conectado ? HIGH : ((millis() / 500) % 2 ? HIGH : LOW));
+
+  static uint32_t ultimoApito = 0;
+  if (somFimPendente) {                  // tem prioridade sobre o apito de "quente"
+    somFimPendente = false;
+    ultimoApito = millis();              // o próximo apito de "quente" só 3 s depois
+    tocar(SOM_FIM, NNOTAS(SOM_FIM));
+  }
+  if (superficieQuente && !somAtual && millis() - ultimoApito >= INTERVALO_APITO_MS) {
+    ultimoApito = millis();
+    tocar(SOM_QUENTE, NNOTAS(SOM_QUENTE));
+  }
+  atualizarSom();
+}
+
+// ------------------------------------------------------------------
 void setup() {
   // antes de tudo: resistência desligada
   digitalWrite(PINO_SSR, LOW);
   pinMode(PINO_SSR, OUTPUT);
   digitalWrite(PINO_CS, HIGH);
   pinMode(PINO_CS, OUTPUT);
+  pinMode(PINO_LED_QUENTE, OUTPUT);
+  pinMode(PINO_LED_STATUS, OUTPUT);
+  digitalWrite(PINO_LED_QUENTE, LOW);
+  digitalWrite(PINO_LED_STATUS, HIGH);   // acende já ao ligar; passa a piscar no loop
+  tocar(SOM_LIGOU, NNOTAS(SOM_LIGOU));   // som de "ligou"
+  while (somAtual) atualizarSom();       // ~0,5 s, antes do Wi-Fi (que pode levar 15 s)
   pinMode(PINO_SCK, OUTPUT);
   pinMode(PINO_SO, INPUT);
 
@@ -708,5 +784,6 @@ void loop() {
 
   if (millis() - ultimaTelemetria >= 250) { ultimaTelemetria = millis(); enviarTelemetria(); }
 
+  atualizarAvisos();
   ws.cleanupClients();
 }

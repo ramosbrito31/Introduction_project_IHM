@@ -70,6 +70,9 @@ Em 220 V fase-fase, cada fio é uma fase: interrompa o que passa pelo fusível e
 | MAX6675 SCK / SO / CS | GPIO 18 / GPIO 19 / GPIO 23 |
 | ZMPT101B VCC / GND | 3V3 / GND |
 | ZMPT101B OUT | GPIO 34 |
+| LED 1 (vermelho, superfície quente) | GPIO 32 → resistor de 220–330 Ω → LED → GND |
+| LED 2 (status) | GPIO 33 → resistor de 220–330 Ω → LED → GND |
+| Speaker | GPIO 25 → resistor de 470 Ω → base do BC337 (10 kΩ da base ao GND); speaker entre os 5 V do buck e o coletor; emissor no GND |
 
 O resistor de 10 kΩ mantém o SSR desligado enquanto o ESP32 reinicia. Os pinos ficam no início de `src/main.cpp`.
 
@@ -117,6 +120,19 @@ pio run -t uploadfs
 ```
 
 O primeiro comando grava o firmware e o segundo grava o site; sem ele, a placa não entrega a página.
+
+## LEDs e som
+
+| Aviso | Quando |
+|---|---|
+| LED 2 piscando | Desde que liga, até um aparelho abrir o site (ou a bancada) pelo Wi-Fi |
+| LED 2 aceso | Há um aparelho conectado |
+| LED 1 (vermelho) aceso | Superfície a 50 °C ou mais (apaga abaixo de 45 °C), ou termopar com defeito |
+| Três notas subindo | A placa ligou |
+| Três apitos rápidos | O ciclo terminou (chegou ao fim da curva) |
+| Apito a cada 3 s | Enquanto a superfície estiver quente, inclusive durante o ciclo |
+
+Os limites ficam no início de `src/main.cpp` (`TEMP_QUENTE`, `INTERVALO_APITO_MS`).
 
 ## Proteções
 
