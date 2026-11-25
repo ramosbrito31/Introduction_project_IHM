@@ -33,9 +33,12 @@ float velocidadeCurva(const Ponto* c, int n, float t, float tempC, float folga) 
   const float FAIXA = 4.0f, MINIMA = 0.05f;     // °C, fração
   const float APROX = 15.0f, FOLGA_TOPO = 1.0f; // °C
   float alvo = interpolar(c, n, t);
-  if (interpolar(c, n, t + 1.0f) <= alvo) return 1.0f;      // só espera nas subidas
   int i = 0;
-  while (i < n - 1 && c[i].t <= t) i++;                     // próximo ponto
+  while (i < n - 1 && c[i].t <= t) i++;                     // c[i]: fim do trecho atual
+  // Só espera nas subidas. Olha o trecho atual (e não t + 1 s): senão, no último
+  // segundo antes do pico a descida já aparecia e a curva passava do pico sem a placa.
+  bool subindo = i > 0 && c[i-1].t <= t && t < c[i].t && c[i].T > c[i-1].T;
+  if (!subindo) return 1.0f;
   while (i < n - 1 && c[i+1].T > c[i].T) i++;               // fim desta subida
   float f = folga * limitar((c[i].T - alvo) / APROX, 0.0f, 1.0f);
   if (f < FOLGA_TOPO) f = folga < FOLGA_TOPO ? folga : FOLGA_TOPO;
@@ -107,7 +110,10 @@ const char* validarParam(int i, float v) {
 // desligada logo depois. O modelo é linear, então a previsão é
 //     T(τ) = resposta livre(τ) + duty × resposta a 100%(τ)
 // e o limite sai direto, sem tentativa e erro.
-float Controlador::tetoFreio(const Ponto* c, int n, float t, float vel, float T) const {
+// A previsão olha a curva em segundos REAIS à frente, mesmo com a curva esperando a
+// placa: ela volta a andar assim que a placa alcança. (Com o tempo da curva, uma curva
+// parada fazia o freio segurar a placa abaixo do alvo e a espera nunca acabava.)
+float Controlador::tetoFreio(const Ponto* c, int n, float t, float T) const {
   const float DT = 0.25f;      // s: passo da previsão
   const float SEGURA = 1.0f;   // s: o duty de agora vale por uma janela do SSR
   float tau = p_.atraso > 0.05f ? p_.atraso : 0.05f;
@@ -128,7 +134,7 @@ float Controlador::tetoFreio(const Ponto* c, int n, float t, float vel, float T)
     Tl += (p_.pMax * xl - p_.perda * (Tl - p_.tAmb)) * DT;
     Ts += (p_.pMax * xs - p_.perda * Ts) * DT;
     // não exige baixar (isso é papel do PI): só não deixa subir além da curva
-    float a2 = interpolar(c, n, t + tk * vel);
+    float a2 = interpolar(c, n, t + tk);
     if (a2 > maxCurva) maxCurva = a2;
     float lim = maxCurva + p_.margem;
     if (lim < T) lim = T;
@@ -158,7 +164,7 @@ float Controlador::calcular(const Ponto* c, int n, float t, float tempC, float d
   float erro = interpolar(c, n, t) - tempC;
   float p    = p_.kp * erro;
   float semI = ff + p;
-  float teto = p_.margem >= 0 ? tetoFreio(c, n, t, vel, tempC) : 100.0f;
+  float teto = p_.margem >= 0 ? tetoFreio(c, n, t, tempC) : 100.0f;
 
   // anti-windup: não acumula integral com a saída saturada (ou freada) no mesmo
   // sentido do erro, nem longe da curva (rampas e degraus)

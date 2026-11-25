@@ -7,6 +7,7 @@ import csv
 import json
 import math
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -22,6 +23,18 @@ NOMES_PARAM = ["pMax", "perda", "tAmb", "atraso", "kp", "ki", "iMax", "margem", 
 # mesmos valores de PARAM_CONTROLE em src/main.cpp
 PARAM_FABRICA = {"pMax": 3.2, "perda": 0.008, "tAmb": 25.0, "atraso": 5.0, "kp": 5.0,
                  "ki": 0.4, "iMax": 25.0, "margem": 1.0, "bandaI": 15.0, "folga": 4.0}
+def params_do_codigo():
+    """Lê os valores de PARAM_CONTROLE direto do src/main.cpp."""
+    try:
+        texto = open(os.path.join(RAIZ, "src", "main.cpp"), encoding="utf-8").read()
+        bloco = re.search(r"const ParamControle PARAM_CONTROLE\s*=\s*\{(.*?)\};", texto, re.S).group(1)
+        bloco = re.sub(r"//[^\n]*", "", bloco)
+        valores = [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?(?:[eE]-?\d+)?", bloco)]
+        return dict(zip(NOMES_PARAM, valores)) if len(valores) == len(NOMES_PARAM) else None
+    except (OSError, AttributeError):
+        return None
+
+
 # algoritmo antigo (antes do freio preditivo), para comparação
 PARAM_SEM_FREIO = dict(PARAM_FABRICA, margem=-1.0, bandaI=300.0)
 

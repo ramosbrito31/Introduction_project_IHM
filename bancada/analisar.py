@@ -110,7 +110,7 @@ def carregar(entradas, volts):
 # ======================================================================
 # 1. Identificação do modelo
 # ======================================================================
-def sim_modelo(th, g):
+def sim_modelo(th, g, x0=0.0):
     pMax, tau1, k1, k2, tau2, morto, Ta = th
     u = g["u"]
     n = len(u)
@@ -129,7 +129,7 @@ def sim_modelo(th, g):
     a2 = 1 - math.exp(-PASSO / tau2)
     ud = ud.tolist()
     T = Ts = float(g["temp"][0])
-    x = 0.0
+    x = float(x0)                    # potência já "a caminho" no início do log
     out = [Ts]
     for k in range(1, n):
         x += (ud[k - 1] - x) * a1
@@ -140,7 +140,11 @@ def sim_modelo(th, g):
     return np.array(out)
 
 
-def identificar(ensaios):
+def identificar(ensaios, ambiente=25.0):
+    """Ajusta o modelo da placa. A temperatura ambiente fica FIXA: solta, ela se mistura
+    com a perda de calor (as duas explicam o mesmo resfriamento) e o ajuste ia parar em
+    valores sem sentido (Ta = 40 °C, pMax no limite). Cada log também ganha a sua
+    potência inicial "a caminho" (x0), porque um CSV do site pode começar no meio do aquecimento."""
     from scipy.optimize import least_squares
     grades = [(e, e.grade()) for e in ensaios]
     grades = [(e, g) for e, g in grades if g is not None]
@@ -155,31 +159,41 @@ def identificar(ensaios):
         if cheio.sum() > 20:
             d = np.gradient(g["temp"], PASSO)
             taxa = max(taxa, float(np.percentile(d[cheio], 95)))
-    x0 = np.array([max(taxa * 1.2, 1.0), 8.0, 0.007, 1e-5, 2.0, 1.0, min(max(tmin - 1, 10), 35)])
-    lo = np.array([LIM_MODELO[n][0] for n in NOMES_MODELO])
-    hi = np.array([LIM_MODELO[n][1] for n in NOMES_MODELO])
+    NG = 6                                            # pMax, tau1, k1, k2, tau2, morto (Ta fixo)
+    ng = len(grades)
+    x0 = np.array([max(taxa * 1.2, 1.0), 8.0, 0.007, 1e-5, 2.0, 1.0] +
+                  [min(0.9, float(g["u"][0])) for _, g in grades])
+    lo = np.array([LIM_MODELO[n][0] for n in NOMES_MODELO[:NG]] + [0.0] * ng)
+    hi = np.array([LIM_MODELO[n][1] for n in NOMES_MODELO[:NG]] + [1.0] * ng)
     x0 = np.clip(x0, lo + 1e-9, hi - 1e-9)
-    escala = np.array([1.0, 5.0, 0.005, 1e-5, 2.0, 1.0, 5.0])
+    escala = np.array([1.0, 5.0, 0.005, 1e-5, 2.0, 1.0] + [0.3] * ng)
 
-    def residuos(th):
+    def completo(v):
+        return list(v[:NG]) + [ambiente]
+
+    def residuos(v):
+        th = completo(v)
         r = []
-        for _, g in grades:
-            m = sim_modelo(th, g)
+        for j, (_, g) in enumerate(grades):
+            m = sim_modelo(th, g, v[NG + j])
             r.append((m - g["temp"])[g["valido"]])
         return np.concatenate(r)
 
     melhor = None
-    for chute in (x0, x0 * np.array([1, 2.5, 1, 1, 2, 2, 1])):   # dois pontos de partida
-        chute = np.clip(chute, lo + 1e-9, hi - 1e-9)
+    for mult in ([1, 1, 1, 1, 1, 1], [1, 2.5, 1, 1, 2, 2]):          # dois pontos de partida
+        chute = np.clip(x0 * np.array(mult + [1] * ng), lo + 1e-9, hi - 1e-9)
         r = least_squares(residuos, chute, bounds=(lo, hi), x_scale=escala, loss="soft_l1", f_scale=2.0,
                           max_nfev=300)
         if melhor is None or r.cost < melhor.cost:
             melhor = r
-    th = melhor.x
+    th = completo(melhor.x)
     modelo = dict(zip(NOMES_MODELO, [float(v) for v in th]))
+    # parâmetro encostado no limite = os dados não bastam para determiná-lo
+    modelo["no_limite"] = [n for n in NOMES_MODELO[:NG] if n not in ("k1", "k2", "morto")
+                           and (modelo[n] <= LIM_MODELO[n][0] * 1.01 or modelo[n] >= LIM_MODELO[n][1] * 0.99)]
     qualidade = {}
-    for e, g in grades:
-        m = sim_modelo(th, g)
+    for j, (e, g) in enumerate(grades):
+        m = sim_modelo(th, g, melhor.x[NG + j])
         err = (m - g["temp"])[g["valido"]]
         qualidade[e.nome] = {"rmse": float(np.sqrt(np.mean(err ** 2))), "max": float(np.max(np.abs(err))),
                              "t": g["t"] - g["t"][0], "medido": g["temp"], "modelo": m, "u": g["u"]}
@@ -504,7 +518,7 @@ def curvas_para_otimizar(ensaios):
     return curvas
 
 
-def analisar(entradas, saida=None, iteracoes=250, volts=220.0):
+def analisar(entradas, saida=None, iteracoes=250, volts=220.0, ambiente=25.0):
     t_ini = time.time()
     if isinstance(entradas, str):
         entradas = [entradas]
@@ -526,7 +540,11 @@ def analisar(entradas, saida=None, iteracoes=250, volts=220.0):
 
     # 1. modelo
     print("\n1) Identificando o modelo da placa...")
-    m, qualidade = identificar(ensaios)
+    m, qualidade = identificar(ensaios, ambiente)
+    limite = m.pop("no_limite", [])
+    if limite:
+        print(f"   ATENÇÃO: {', '.join(limite)} no limite da faixa: os logs não bastam para identificar a placa. "
+              "Rode o grupo 'identificacao' (malha aberta, começando com a placa fria).")
     if m is None:
         print("Dados insuficientes para identificar a placa.")
         return None
@@ -615,6 +633,9 @@ def analisar(entradas, saida=None, iteracoes=250, volts=220.0):
     L.append(f"  - parâmetros usados nos testes: **{fmt(r_usados[0])} / {fmt(r_usados[1])} °C**")
     L.append(f"  - parâmetros sugeridos: **{fmt(r_sug[0])} / {fmt(r_sug[1])} °C**")
     L.append(f"- Custo total (overshoot pesa 4x): {custo_usados:.1f} → {custo:.1f}")
+    if limite:
+        L.append(f"- **ATENÇÃO: {', '.join(limite)} ficou no limite da faixa de ajuste.** Os logs não bastam para "
+                 "identificar a placa e os parâmetros sugeridos não são confiáveis. Rode o grupo `identificacao`.")
     L.append(f"- Modelo da placa ajustado com erro rms médio de {fmt(rmse_geral, 2)} °C "
              f"({'bom' if rmse_geral < 2 else 'razoável' if rmse_geral < 4 else 'ruim: veja a seção 1'}).\n")
     L.append("### Parâmetros sugeridos\n")
@@ -719,8 +740,9 @@ def main():
     ap.add_argument("--saida", help="pasta do relatório (padrão: <primeira pasta>/analise)")
     ap.add_argument("--iteracoes", type=int, default=250, help="simulações da otimização (padrão 250)")
     ap.add_argument("--volts", type=float, default=220, help="tensão da rede para logs sem medição (CSV do site)")
+    ap.add_argument("--ambiente", type=float, default=25, help="temperatura ambiente durante os testes (°C)")
     a = ap.parse_args()
-    analisar(a.entradas, a.saida, a.iteracoes, a.volts)
+    analisar(a.entradas, a.saida, a.iteracoes, a.volts, a.ambiente)
 
 
 if __name__ == "__main__":

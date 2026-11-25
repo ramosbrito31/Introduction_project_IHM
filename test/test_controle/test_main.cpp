@@ -364,6 +364,26 @@ void test_freio_deixa_chegar_ao_pico() {
   TEST_ASSERT_FLOAT_WITHIN(5.0f, 245.0f, r.pico);
 }
 
+// O modelo diz que a placa é o dobro do que ela é, com atraso grande (o freio prevê
+// muito calor acumulado). Antes, o freio olhava a curva no tempo dela: com a curva
+// esperando a placa, segurava a placa abaixo do alvo e a espera não acabava
+// (1680 s e pico de 218 °C numa curva de 360 s).
+void test_modelo_otimista_nao_trava_a_curva() {
+  Planta pl{2.2f, 0.008f, 10.0f};                            // chega a ~300 °C com 100%
+  ParamControle otimista = PARAM; otimista.pMax = 4.4f; otimista.atraso = 25.0f;   // o dobro
+  Resultado r = ciclo(SAC305, N(SAC305), pl, false, 217, otimista);
+  relata("modelo otimista", r);
+  TEST_ASSERT_EQUAL(FALHA_NENHUMA, r.falha);
+  TEST_ASSERT_GREATER_THAN_FLOAT(228.0f, r.pico);
+  TEST_ASSERT_LESS_THAN_FLOAT(900.0f, r.duracao);
+}
+
+void test_curva_nao_passa_do_pico_sem_a_placa() {
+  // t = 239,6 s: alvo 244,6 °C, a 0,4 s do pico (245 °C em 240 s); placa 4,6 °C atrás
+  TEST_ASSERT_LESS_THAN_FLOAT(0.2f, velocidadeCurva(SAC305, N(SAC305), 239.6f, 240.0f));
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, velocidadeCurva(SAC305, N(SAC305), 240.5f, 240.0f));   // já na descida
+}
+
 void test_curva_espera_mais_perto_do_pico() {
   // 4,5 °C atrás: no meio da subida quase não espera; a 2 °C do pico, espera bastante
   TEST_ASSERT_GREATER_THAN_FLOAT(0.8f, velocidadeCurva(SAC305, N(SAC305), 45, 83.0f));    // alvo 87,5
@@ -400,6 +420,8 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(test_freio_reduz_overshoot_em_placa_lenta);
   RUN_TEST(test_freio_deixa_chegar_ao_pico);
+  RUN_TEST(test_modelo_otimista_nao_trava_a_curva);
+  RUN_TEST(test_curva_nao_passa_do_pico_sem_a_placa);
   RUN_TEST(test_curva_espera_mais_perto_do_pico);
   RUN_TEST(test_malha_aberta_corta_e_nao_volta);
   RUN_TEST(test_parametros_por_nome);

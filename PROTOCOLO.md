@@ -7,7 +7,7 @@ Todas as mensagens são **JSON em texto**, uma por frame. A página reconecta so
 
 | Comando | Exemplo | O que o ESP32 deve fazer |
 |---|---|---|
-| `hello` | `{"cmd":"hello"}` | Enviado ao conectar. Responder com `state` e `wifi`, e, se houver ciclo em andamento, `profile` + `history`. |
+| `hello` | `{"cmd":"hello"}` | Enviado ao conectar. Responder com `state`, `wifi`, `config` e `som`, e, se houver ciclo em andamento, `profile` + `history`. |
 | `start` | ver abaixo | Iniciar o ciclo com a curva recebida. Responder com `profile` (eco) e `state: "running"`. |
 | `stop` | `{"cmd":"stop"}` | Desligar a resistência imediatamente. Responder `state: "stopped"`. |
 
@@ -144,6 +144,29 @@ ESP32 → página:
 | `sat` | A onda bate no limite do ADC: baixar o trimpot. |
 | `vac` | Tensão medida (V), ou `null`. |
 | `vuse` / `src` | Tensão em uso pelo controle e de onde vem: `sensor` ou `manual`. |
+
+## Som da placa (música do fim do ciclo e apito de superfície quente)
+
+No fim da curva (`running` → `done`), o speaker da placa toca `data/musica.wav` no lugar dos três apitos. Com a música desligada, ou sem o arquivo, a placa apita. A opção fica gravada na flash (padrão: ligada), vale para todos os aparelhos e pode ser trocada durante o ciclo. `som` também é enviado em resposta ao `hello`.
+
+O botão de mudo do site cala os alertas do navegador **e** o apito de superfície quente da placa (`apito`). Essa opção **não** fica gravada na flash: é um aviso de segurança, então volta a ligar quando a placa reinicia. Conectada, a página segue o `apito` que a placa informa, então todos os aparelhos mostram o mesmo mudo.
+
+Página → ESP32:
+| Comando | Exemplo | Resposta |
+|---|---|---|
+| `somStatus` | `{"cmd":"somStatus"}` | `som` |
+| `somSet` | `{"cmd":"somSet","musica":false}` | `som`. Desligar também interrompe a música, se estiver tocando. |
+| `somSet` (mudo) | `{"cmd":"somSet","apito":false}` | `som`. Liga/desliga o apito de superfície quente (vale até reiniciar). |
+
+ESP32 → página:
+```json
+{"type":"som","musica":true,"arquivo":true,"apito":true}
+```
+| Campo | Descrição |
+|---|---|
+| `musica` | Música ligada. |
+| `arquivo` | A placa tem uma música válida gravada (`/musica.wav`, PCM 8 bits mono). |
+| `apito` | Apito de superfície quente (a cada 3 s) ligado. `false` = mudo pelo site. |
 
 ## Bancada de testes (`bancada/`)
 

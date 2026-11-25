@@ -30,7 +30,7 @@ try:
 except Exception:
     pass
 
-from comum import (AQUI, PARAM_FABRICA, NOMES_PARAM, conectar, simular, salvar_cabecalho,
+from comum import (AQUI, PARAM_FABRICA, NOMES_PARAM, conectar, simular, salvar_cabecalho, params_do_codigo,
                    linha_log, metricas_curva)
 
 
@@ -46,7 +46,7 @@ class PlacaVirtual:
 
     def __init__(self, planta=None, vrede=220.0, ruido=0.5):
         self.pl = dict(planta or PLANTA_VIRTUAL)
-        self.ctl = dict(PARAM_FABRICA)
+        self.ctl = params_do_codigo() or dict(PARAM_FABRICA)   # igual ao firmware: PARAM_CONTROLE
         self.vrede, self.ruido = vrede, ruido
         self.t = 0.0
         self.T = self.Ts = self.pl["Ta"]
@@ -78,7 +78,7 @@ class PlacaVirtual:
                 if self.estado == "running":
                     return self.fila.append({"type": "params", "event": "busy", "p": self.ctl})
                 if c.get("reset"):
-                    self.ctl = dict(PARAM_FABRICA)
+                    self.ctl = params_do_codigo() or dict(PARAM_FABRICA)
                 for k, v in (c.get("set") or {}).items():
                     if k not in NOMES_PARAM:
                         return self.fila.append({"type": "params", "event": "failed", "msg": "Parâmetro desconhecido.", "p": self.ctl})

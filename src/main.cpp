@@ -46,12 +46,15 @@ const int PINO_SOM        = 25;  // speaker, pelo transistor BC337
 const float    TEMP_QUENTE       = 50.0f;  // °C: superfície quente (mesmo limite do aviso do site)
 const float    HISTERESE_QUENTE  = 5.0f;   // °C: só deixa de ser quente abaixo de 45 °C (sem piscar no limite)
 const uint32_t INTERVALO_APITO_MS = 3000;  // com a superfície quente, um apito a cada 3 s
+// Música do fim do ciclo (substitui os 3 apitos). Gerada por ferramentas/converter_musica.py
+// e gravada com "pio run -t uploadfs". Sem o arquivo, ficam os apitos.
+const char*    ARQUIVO_MUSICA = "/musica.wav";
 
 // ---- modelo da placa: CALIBRE com a sua placa (ver README.md) ----
 const ParamControle PARAM_CONTROLE = {
   11.6f,      // pMax   °C/s com 100% de potência, EM 220 V (o firmware corrige pela tensão da rede)
   0.004234f,  // perda  1/s
-  40.0f,      // tAmb   °C
+  25.0f,      // tAmb   °C
   25.93f,     // atraso s
   3.026f,     // kp     %/°C
   0.4062f,    // ki     %/(°C·s)
@@ -113,6 +116,12 @@ bool             ssrPreso = false;   // só sai reiniciando a placa
 
 float tensaoMedida();   // (definidas em CONFIGURAÇÕES AVANÇADAS)
 float tensaoEmUso();
+bool  musicaLigada = true;   // opção do site, gravada na flash
+// Apito de superfície quente: o botão de mudo do site desliga. NÃO vai para a flash:
+// é um aviso de segurança, então volta a ligar sempre que a placa reinicia.
+bool  apitoQuenteLigado = true;
+void  pararMusica();    // (definidas em LEDs e speaker)
+void  enviarSom();
 
 const char* nomeEstado() {
   switch (estado) {
@@ -524,6 +533,7 @@ void iniciarCiclo(JsonDocument& doc) {
   controlador.reiniciar();
   monitor.reiniciar();
   falhaAtual = FALHA_NENHUMA;
+  pararMusica();                // se ainda estiver tocando a do ciclo anterior
   enviarPerfil();
   mudarEstado(EST_RUNNING);     // a página espera isto em até 4 s
 }
@@ -535,7 +545,20 @@ void processarComando(JsonDocument& doc) {
     enviarEstado();
     enviarWifi();
     enviarConfig();
+    enviarSom();
     if (estado == EST_RUNNING) enviarPerfil();
+  }
+  else if (strcmp(cmd, "somStatus") == 0) {
+    enviarSom();
+  }
+  else if (strcmp(cmd, "somSet") == 0) {   // vale também durante o ciclo: não mexe no controle
+    if (!doc["musica"].isNull()) {
+      musicaLigada = doc["musica"] | true;
+      prefs.begin("som", false); prefs.putBool("musica", musicaLigada); prefs.end();
+      if (!musicaLigada) pararMusica();
+    }
+    if (!doc["apito"].isNull()) apitoQuenteLigado = doc["apito"] | true;
+    enviarSom();
   }
   else if (strcmp(cmd, "configStatus") == 0) {
     enviarConfig();
@@ -671,7 +694,17 @@ void iniciarWatchdog() {
 // ------------------------------------------------------------------
 // LEDs e speaker
 // ------------------------------------------------------------------
-// O som é tocado sem travar o loop: uma sequência de notas avança a cada volta.
+// O speaker fica preso a um canal do LEDC (o PWM do ESP32), que faz os dois tipos de som:
+//  - apitos: onda quadrada na frequência da nota;
+//  - música: PWM de 78 kHz (inaudível) cuja largura segue cada amostra do áudio. O próprio
+//    speaker filtra a portadora e sobra o som. Um timer de hardware troca a amostra no
+//    ritmo do arquivo (16 mil vezes por segundo), lendo de um buffer que o loop enche.
+// Nada aqui trava o loop: as notas e o buffer avançam a cada volta.
+const int      CANAL_SOM      = 4;        // canal do LEDC do speaker
+const uint32_t PWM_MUSICA_HZ  = 78125;    // com 8 bits: 80 MHz / 256 / 4, exato
+const int      TIMER_MUSICA   = 0;        // timer de hardware das amostras
+const uint32_t TAM_BUF_MUSICA = 8192;     // potência de 2: 0,5 s a 16 kHz, folga se o loop demorar
+
 struct Nota { uint16_t freq; uint16_t ms; };   // freq 0 = silêncio
 const Nota SOM_LIGOU[]  = {{1047, 110}, {0, 40}, {1319, 110}, {0, 40}, {1568, 220}};
 const Nota SOM_QUENTE[] = {{2500, 120}};
@@ -681,11 +714,11 @@ const Nota SOM_FIM[]    = {{2000, 80}, {0, 70}, {2000, 80}, {0, 70}, {2000, 80}}
 const Nota* somAtual = nullptr;
 int         somN = 0, somI = 0;
 uint32_t    somDesde = 0;
+uint32_t    ultimoApito = 0;
 bool        superficieQuente = false;
 
 void iniciarNota() {
-  if (somAtual[somI].freq) tone(PINO_SOM, somAtual[somI].freq);
-  else                     noTone(PINO_SOM);
+  ledcWriteTone(CANAL_SOM, somAtual[somI].freq);   // 0 = silêncio
 }
 
 void tocar(const Nota* s, int n) {
@@ -696,8 +729,143 @@ void tocar(const Nota* s, int n) {
 void atualizarSom() {
   if (!somAtual || millis() - somDesde < somAtual[somI].ms) return;
   somDesde = millis();
-  if (++somI >= somN) { noTone(PINO_SOM); somAtual = nullptr; }
+  if (++somI >= somN) { ledcWriteTone(CANAL_SOM, 0); somAtual = nullptr; }
   else iniciarNota();
+}
+
+// ---- música ----
+bool        musicaOk = false;        // o arquivo existe e é um WAV que dá para tocar
+bool        musicaTocando = false;
+uint32_t    musicaTaxa = 0;          // amostras por segundo
+uint32_t    musicaInicio = 0, musicaTam = 0, musicaRestante = 0;   // dados de áudio no arquivo
+File        musicaArq;
+hw_timer_t* timerMusica = nullptr;
+
+// Buffer circular: o loop escreve, o timer lê. Os índices só crescem (a posição é % TAM).
+uint8_t           musBuf[TAM_BUF_MUSICA];
+volatile uint32_t musEscrita = 0, musLeitura = 0;
+volatile bool     musFimArquivo = false;   // a última amostra já está no buffer
+volatile bool     musParar = false;        // encerrar: baixa o volume até zero
+volatile bool     musAcabou = false;       // o volume chegou a zero; o loop desliga o timer
+volatile uint16_t musGanho = 0;            // 0..256: sobe no início e desce no fim, sem estalo
+volatile uint8_t  musUltima = 128;
+
+// Interrupção do timer, uma vez por amostra.
+void amostraMusica() {
+  uint8_t s = musUltima;
+  if (musParar) {
+    if (musGanho) musGanho--;
+    else musAcabou = true;
+  } else {
+    if (musLeitura != musEscrita) { s = musBuf[musLeitura % TAM_BUF_MUSICA]; musLeitura++; musUltima = s; }
+    else if (musFimArquivo) musParar = true;   // senão o loop atrasou: repete a última amostra
+    if (musGanho < 256) musGanho++;
+  }
+  ledcWrite(CANAL_SOM, (s * musGanho) >> 8);
+}
+
+static uint32_t le16(const uint8_t* p) { return p[0] | p[1] << 8; }
+static uint32_t le32(const uint8_t* p) { return le16(p) | le16(p + 2) << 16; }
+
+// Abre o WAV e acha os dados. Aceita só PCM de 8 bits mono, que é o que o conversor gera.
+const char* abrirMusica() {
+  musicaArq = LittleFS.open(ARQUIVO_MUSICA, "r");
+  if (!musicaArq) return "arquivo nao encontrado";
+  uint8_t h[16];
+  if (musicaArq.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) return "nao e um WAV";
+  bool fmtOk = false;
+  while (musicaArq.read(h, 8) == 8) {
+    uint32_t n = le32(h + 4), prox = musicaArq.position() + n + (n & 1);
+    if (!memcmp(h, "fmt ", 4)) {
+      if (n < 16 || musicaArq.read(h, 16) != 16) return "cabecalho invalido";
+      musicaTaxa = le32(h + 4);
+      if (le16(h) != 1 || le16(h + 2) != 1 || le16(h + 14) != 8) return "precisa ser PCM de 8 bits mono (use ferramentas/converter_musica.py)";
+      if (musicaTaxa < 4000 || musicaTaxa > 32000) return "taxa fora de 4000 a 32000 Hz";
+      fmtOk = true;
+    } else if (!memcmp(h, "data", 4)) {
+      if (!fmtOk) return "cabecalho invalido";
+      musicaInicio = musicaArq.position();
+      musicaTam = min(n, (uint32_t)(musicaArq.size() - musicaInicio));
+      return musicaTam ? nullptr : "sem audio";
+    }
+    musicaArq.seek(prox);
+  }
+  return "sem audio";
+}
+
+void verificarMusica() {
+  const char* e = abrirMusica();
+  musicaOk = !e;
+  if (e) Serial.printf("# Musica: %s (%s). No fim do ciclo, toca os apitos.\n", ARQUIVO_MUSICA, e);
+  else   Serial.printf("# Musica: %.1f s a %u Hz, %s\n", (float)musicaTam / musicaTaxa, musicaTaxa, musicaLigada ? "ligada" : "desligada");
+  musicaArq.close();
+}
+
+void encherMusica() {
+  while (musicaRestante) {
+    uint32_t livre = TAM_BUF_MUSICA - (musEscrita - musLeitura);
+    if (livre < 512 && livre < musicaRestante) break;   // lê em blocos, não byte a byte
+    uint32_t pos = musEscrita % TAM_BUF_MUSICA;
+    uint32_t n = min(min(livre, TAM_BUF_MUSICA - pos), min(musicaRestante, (uint32_t)2048));
+    int lidos = musicaArq.read(musBuf + pos, n);
+    if (lidos <= 0) { musicaRestante = 0; break; }
+    musEscrita += lidos;          // só depois de copiar: o timer não lê o que ainda não chegou
+    musicaRestante -= lidos;
+  }
+  if (!musicaRestante) musFimArquivo = true;
+}
+
+bool iniciarMusica() {
+  if (musicaTocando) { timerAlarmDisable(timerMusica); musicaArq.close(); musicaTocando = false; }
+  if (abrirMusica()) { musicaArq.close(); return false; }
+  musicaArq.seek(musicaInicio);
+  musicaRestante = musicaTam;
+  musEscrita = musLeitura = 0;
+  musFimArquivo = musParar = musAcabou = false;
+  musGanho = 0; musUltima = 128;
+  encherMusica();                         // buffer cheio antes de começar
+
+  somAtual = nullptr;                     // a música tem prioridade sobre um apito
+  ledcSetup(CANAL_SOM, PWM_MUSICA_HZ, 8);
+  ledcWrite(CANAL_SOM, 0);
+  timerAlarmWrite(timerMusica, 40000000 / musicaTaxa, true);   // timer a 40 MHz (80 MHz / 2)
+  timerWrite(timerMusica, 0);
+  timerAlarmEnable(timerMusica);
+  musicaTocando = true;
+  return true;
+}
+
+void pararMusica() {                       // termina sem estalo, em ~16 ms
+  if (musicaTocando) musParar = true;
+}
+
+void atualizarMusica() {
+  if (!musicaTocando) return;
+  if (musAcabou) {
+    timerAlarmDisable(timerMusica);
+    ledcWrite(CANAL_SOM, 0);               // transistor desligado: sem corrente no speaker
+    musicaArq.close();
+    musicaTocando = false;
+    ultimoApito = millis();                // o apito de "quente" volta 3 s depois
+  } else {
+    encherMusica();
+  }
+}
+
+void carregarSom() {
+  prefs.begin("som", true);
+  musicaLigada = prefs.getBool("musica", true);
+  prefs.end();
+  verificarMusica();
+}
+
+void enviarSom() {
+  JsonDocument doc;
+  doc["type"]    = "som";
+  doc["musica"]  = musicaLigada;
+  doc["arquivo"] = musicaOk;
+  doc["apito"]   = apitoQuenteLigado;
+  enviar(doc);
 }
 
 void atualizarAvisos() {
@@ -712,17 +880,18 @@ void atualizarAvisos() {
   bool conectado = ws.count() > 0;
   digitalWrite(PINO_LED_STATUS, conectado ? HIGH : ((millis() / 500) % 2 ? HIGH : LOW));
 
-  static uint32_t ultimoApito = 0;
   if (somFimPendente) {                  // tem prioridade sobre o apito de "quente"
     somFimPendente = false;
     ultimoApito = millis();              // o próximo apito de "quente" só 3 s depois
-    tocar(SOM_FIM, NNOTAS(SOM_FIM));
+    // a música substitui os 3 apitos; sem ela (desligada ou sem arquivo), ficam os apitos
+    if (!(musicaLigada && musicaOk && iniciarMusica())) tocar(SOM_FIM, NNOTAS(SOM_FIM));
   }
-  if (superficieQuente && !somAtual && millis() - ultimoApito >= INTERVALO_APITO_MS) {
+  if (superficieQuente && apitoQuenteLigado && !somAtual && !musicaTocando && millis() - ultimoApito >= INTERVALO_APITO_MS) {
     ultimoApito = millis();
     tocar(SOM_QUENTE, NNOTAS(SOM_QUENTE));
   }
   atualizarSom();
+  atualizarMusica();
 }
 
 // ------------------------------------------------------------------
@@ -736,6 +905,11 @@ void setup() {
   pinMode(PINO_LED_STATUS, OUTPUT);
   digitalWrite(PINO_LED_QUENTE, LOW);
   digitalWrite(PINO_LED_STATUS, HIGH);   // acende já ao ligar; passa a piscar no loop
+  ledcSetup(CANAL_SOM, 1000, 10);
+  ledcAttachPin(PINO_SOM, CANAL_SOM);    // o speaker fica no LEDC daqui em diante
+  ledcWrite(CANAL_SOM, 0);
+  timerMusica = timerBegin(TIMER_MUSICA, 2, true);   // 40 MHz; o alarme só liga com a música
+  timerAttachInterrupt(timerMusica, amostraMusica, false);
   tocar(SOM_LIGOU, NNOTAS(SOM_LIGOU));   // som de "ligou"
   while (somAtual) atualizarSom();       // ~0,5 s, antes do Wi-Fi (que pode levar 15 s)
   pinMode(PINO_SCK, OUTPUT);
@@ -745,6 +919,7 @@ void setup() {
   Serial.begin(115200);
   LittleFS.begin(true);
   carregarConfig();  // tensão da rede salva (127/220 V)
+  carregarSom();     // opção da música e o arquivo data/musica.wav
 
   iniciarWiFi();   // rede de casa se configurada; senão rede própria "Reflow-Setup"
 

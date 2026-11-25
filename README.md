@@ -10,6 +10,7 @@ O site escolhe a curva de temperatura, o ESP32 lê o termopar e aciona a resist�
 | `data/index.html` | O site (vai para a memória da placa) |
 | `test/test_controle/` | Testes do controle no PC, com uma placa simulada |
 | `bancada/` | Bateria de testes automática na placa real, análise dos logs e otimização do controle ([guia](bancada/README.md)) |
+| `ferramentas/converter_musica.py` | Converte a música do fim do ciclo para `data/musica.wav` ([ver abaixo](#música-do-fim-do-ciclo)) |
 
 ## Materiais
 
@@ -119,7 +120,7 @@ pio run -t upload
 pio run -t uploadfs
 ```
 
-O primeiro comando grava o firmware e o segundo grava o site; sem ele, a placa não entrega a página.
+O primeiro comando grava o firmware e o segundo grava o site e a música (`data/`); sem ele, a placa não entrega a página.
 
 ## LEDs e som
 
@@ -129,10 +130,30 @@ O primeiro comando grava o firmware e o segundo grava o site; sem ele, a placa n
 | LED 2 aceso | Há um aparelho conectado |
 | LED 1 (vermelho) aceso | Superfície a 50 °C ou mais (apaga abaixo de 45 °C), ou termopar com defeito |
 | Três notas subindo | A placa ligou |
-| Três apitos rápidos | O ciclo terminou (chegou ao fim da curva) |
-| Apito a cada 3 s | Enquanto a superfície estiver quente, inclusive durante o ciclo |
+| Música | O ciclo terminou (chegou ao fim da curva), com a música ligada no site |
+| Três apitos rápidos | O ciclo terminou, com a música desligada ou sem `data/musica.wav` na placa |
+| Apito a cada 3 s | Enquanto a superfície estiver quente, inclusive durante o ciclo (pausa enquanto a música toca). O botão de mudo do site desliga até a placa reiniciar; o LED 1 continua acendendo |
 
 Os limites ficam no início de `src/main.cpp` (`TEMP_QUENTE`, `INTERVALO_APITO_MS`).
+
+### Música do fim do ciclo
+
+No topo do site há dois botões de som, independentes:
+
+- **Alto-falante (mudo):** alertas sonoros do site (no navegador) e o apito de superfície quente da placa. Vale para todos os aparelhos conectados. Na placa, o mudo volta a ligar quando ela reinicia, por segurança.
+- **Nota musical:** a música no speaker da placa, que substitui os três apitos de conclusão. Fica gravado no ESP32 e vale para todos os aparelhos. Também interrompe a música se ela estiver tocando. Fica apagado se a placa não tiver música gravada.
+
+A música vai na memória da placa como `data/musica.wav` (8 bits, mono, 16 kHz, cerca de 16 kB por segundo). Para trocar, converta outro arquivo (MP3, WAV, FLAC ou OGG) e grave o site de novo:
+
+```bash
+pip install miniaudio
+python ferramentas/converter_musica.py "caminho/da/musica.mp3"
+pio run -t uploadfs
+```
+
+O script normaliza o volume e corta em 30 s. Use `--inicio 12` para começar a música em 12 s e `--max 15` para mudar o corte. Cabem até uns 40 s junto com o site.
+
+O ESP32 toca a música por PWM de 78 kHz no GPIO 25, pela mesma ligação dos apitos, e o speaker filtra a portadora. A qualidade é a de um rádio pequeno. A música para sozinha se um novo ciclo começar.
 
 ## Proteções
 
@@ -156,7 +177,7 @@ A cada 250 ms o firmware lê o termopar e calcula a potência:
 - **PI:** corrige o erro que sobrar. A integral só acumula perto da curva (`bandaI`), para não "carregar" nas rampas e passar do ponto depois.
 - **Freio preditivo (contra overshoot):** a placa não resfria sozinha rápido, e o calor que já está na resistência continua chegando depois que o SSR desliga. A cada leitura o controle simula o modelo da placa à frente e limita a potência para que, mesmo desligando logo em seguida, a temperatura prevista não passe do maior alvo da curva nos próximos segundos + `margem`.
 - **Janela do SSR:** a potência vira a fração ligada de cada janela de 1 s.
-- **Curva que espera:** numa subida, se a placa ficar mais de `folga` °C para trás (4 °C de fábrica), o relógio da curva desacelera. Perto do topo de cada subida a folga cai para 1 °C, para a placa chegar ao pico antes de a descida começar. Assim o pico é atingido mesmo em uma placa lenta, e o ciclo pode durar mais que a curva.
+- **Curva que espera:** numa subida, se a placa ficar mais de `folga` °C para trás (4 °C de fábrica), o relógio da curva desacelera. Perto do topo de cada subida a folga cai para 1 °C, e a curva só passa do pico quando a placa chega perto dele. Enquanto a curva espera, o freio continua olhando a curva em segundos reais à frente, para não segurar a placa abaixo do alvo. Assim o pico é atingido mesmo em uma placa lenta, e o ciclo pode durar mais que a curva.
 
 ## Calibração
 

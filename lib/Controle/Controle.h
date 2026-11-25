@@ -112,7 +112,7 @@ public:
   }
   const DiagControle& diag() const { return diag_; }
 private:
-  float tetoFreio(const Ponto* curva, int n, float t, float vel, float tempC) const;
+  float tetoFreio(const Ponto* curva, int n, float t, float tempC) const;
   ParamControle p_;
   float integral_ = 0;
   float uf_ = 0;        // modelo interno: fração da potência que já está chegando à placa
